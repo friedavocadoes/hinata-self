@@ -1,13 +1,128 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  sales_rep
+  finance_admin
+}
+
+model User {
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email      String      @unique
+  role       UserRole    @default(sales_rep)
+  fullName   String      @map("full_name")
+  createdAt  DateTime    @default(now()) @map("created_at")
+  Quotations Quotation[]
+  Tasks      Task[]
+
+  @@map("users")
+}
+
+model GlobalSetting {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  settingKey   String   @unique @map("setting_key")
+  settingValue Float    @map("setting_value")
+  description  String?
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("global_settings")
+}
+
+model Product {
+  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String
+  supplyType            String          @map("supply_type")
+  packSizeKg            Float           @map("pack_size_kg")
+  cifRateUsd            Float           @map("cif_rate_usd")
+  defaultProfitPct      Float           @default(5.0) @map("default_profit_pct")
+  inwardClearanceCharge Float           @default(0) @map("inward_clearance_charge")
+  supplierName          String?         @map("supplier_name")
+  supplierMop           String?         @map("supplier_mop")
+  supplierCreditDays    Int             @default(0) @map("supplier_credit_days")
+  storageDays           Int             @default(0) @map("storage_days")
+  createdAt             DateTime        @default(now()) @map("created_at")
+  QuotationItems        QuotationItem[]
+
+  @@map("products")
+}
+
+model TransportRate {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  destination String
+  truckSize   String   @map("truck_size")
+  rateAed     Float    @map("rate_aed")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("transport_rates")
+}
+
+model Quotation {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  quoteNumber      String          @unique @map("quote_number")
+  userId           String          @db.Uuid @map("user_id")
+  customerName     String          @map("customer_name")
+  deliveryType     String          @map("delivery_type")
+  placeOfDelivery  String          @map("place_of_delivery")
+  incoterm         String
+  payTerm          String          @map("pay_term")
+  creditPeriodDays Int             @default(0) @map("credit_period_days")
+  totalCost        Float           @map("total_cost")
+  totalSales       Float           @map("total_sales")
+  totalProfit      Float           @map("total_profit")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  
+  User             User            @relation(fields: [userId], references: [id])
+  Items            QuotationItem[]
+  Tasks            Task[]
+
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  quotationId        String    @db.Uuid @map("quotation_id")
+  productId          String    @db.Uuid @map("product_id")
+  qty                Float
+  targetProfitPct    Float     @map("target_profit_pct")
+  exWorksCost        Float     @map("ex_works_cost")
+  inwardClearance    Float     @default(0) @map("inward_clearance")
+  inwardBankCharge   Float     @default(0) @map("inward_bank_charge")
+  storageCharge      Float     @default(0) @map("storage_charge")
+  outwardClearance   Float     @default(0) @map("outward_clearance")
+  outwardTransport   Float     @default(0) @map("outward_transport")
+  freight            Float     @default(0)
+  insurance          Float     @default(0)
+  otherExpense       Float     @default(0) @map("other_expense")
+  financeCharge      Float     @default(0) @map("finance_charge")
+  totalCost          Float     @map("total_cost")
+  costPerUnit        Float     @map("cost_per_unit")
+  salesPrice         Float     @map("sales_price")
+  profitAmount       Float     @map("profit_amount")
+
+  Quotation          Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  Product            Product   @relation(fields: [productId], references: [id])
+
+  @@map("quotation_items")
+}
+
+model Task {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  quotationId String?    @db.Uuid @map("quotation_id")
+  assignedTo  String?    @db.Uuid @map("assigned_to")
+  title       String
+  status      String     @default("pending")
+  dueDate     DateTime?  @map("due_date") @db.Date
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  Quotation   Quotation? @relation(fields: [quotationId], references: [id])
+  User        User?      @relation(fields: [assignedTo], references: [id])
+
+  @@map("tasks")
 }
