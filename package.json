@@ -10,10 +10,9 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^5.7.1",
-    "@prisma/client": "^7.9.1",
     "@react-pdf/renderer": "^4.6.0",
     "@supabase/ssr": "^0.12.4",
-    "@supabase/supabase-js": "^2.112.2",
+    "@supabase/supabase-js": "^2.112.3",
     "clsx": "^2.1.1",
     "lucide-react": "^1.30.0",
     "next": "16.3.0",
@@ -31,8 +30,12 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
-    "prisma": "^7.9.1",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.9.1": true,
+    "prisma@7.9.1": true,
+    "unrs-resolver@1.12.2": true
   }
 }
