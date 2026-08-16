@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  calculateQuotation,
-  getCustomerProducts,
-  getVehicleTypes,
-  previewQuotation,
-} from "@/app/(dashboard)/quotations/new/actions";
+import { calculateQuotation, getCustomerProducts, getVehicleTypes, previewQuotation } from "@/app/(dashboard)/quotations/new/actions";
 import { getProductStockLevels } from "@/app/(dashboard)/quotations/remove-actions";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useEffect, useMemo, useState } from "react";
@@ -21,11 +16,7 @@ const quotationSchema = z.object({
   incoterm: z.string().uuid("Incoterm is required"),
   paymentTerm: z.string().uuid("Payment term is required"),
   creditDays: z.number().finite().min(0, "Credit days cannot be negative"),
-  items: z.array(z.object({
-    productId: z.string().uuid("Product is required"),
-    quantityKg: z.number().finite().positive("Quantity must be greater than zero"),
-    targetProfitPct: z.number().finite().min(0).lt(100),
-  })).min(1),
+  items: z.array(z.object({ productId: z.string().uuid("Product is required"), quantityKg: z.number().finite().positive("Quantity must be greater than zero"), targetProfitPct: z.number().finite().min(0).lt(100) })).min(1),
 });
 
 type QuotationFormValues = z.infer<typeof quotationSchema>;
@@ -34,44 +25,18 @@ type CalculationResult = Awaited<ReturnType<typeof calculateQuotation>>;
 type PreviewResult = Awaited<ReturnType<typeof previewQuotation>>;
 type CostingItem = Extract<PreviewResult, { success: true; role: "finance_admin" }>["items"][number];
 type CostOverrides = { warehouseDays?: number; transport?: number; other?: number };
+type Props = { customers: Option[]; destinations: Option[]; incoterms: Option[]; paymentTerms: Option[]; products: Option[] };
 
-type Props = {
-  customers: Option[];
-  destinations: Option[];
-  incoterms: Option[];
-  paymentTerms: Option[];
-  products: Option[];
-};
-
-function money(value: number) {
-  return new Intl.NumberFormat("en-AE", { style: "currency", currency: "AED", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
-}
-
-function number(value: number) {
-  return new Intl.NumberFormat("en-AE", { maximumFractionDigits: 2 }).format(value);
-}
-
+function money(value: number) { return new Intl.NumberFormat("en-AE", { style: "currency", currency: "AED", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value); }
+function number(value: number) { return new Intl.NumberFormat("en-AE", { maximumFractionDigits: 2 }).format(value); }
 function getVehicleIdForQuantity(quantityKg: number, vehicles: Option[]) {
-  const capacity = (name: string) => {
-    const match = name.match(/([0-9]+)\s*T/i);
-    return match ? Number(match[1]) * 1000 : Number.MAX_SAFE_INTEGER;
-  };
+  const capacity = (name: string) => { const match = name.match(/([0-9]+)\s*T/i); return match ? Number(match[1]) * 1000 : Number.MAX_SAFE_INTEGER; };
   const ordered = [...vehicles].sort((a, b) => capacity(a.name) - capacity(b.name));
-  for (const vehicle of ordered) {
-    const vehicleCapacity = capacity(vehicle.name);
-    if (vehicleCapacity !== Number.MAX_SAFE_INTEGER && quantityKg <= vehicleCapacity) return vehicle.id;
-  }
+  for (const vehicle of ordered) { const vehicleCapacity = capacity(vehicle.name); if (vehicleCapacity !== Number.MAX_SAFE_INTEGER && quantityKg <= vehicleCapacity) return vehicle.id; }
   return ordered.find((vehicle) => /trailer/i.test(vehicle.name))?.id ?? "";
 }
-
-function FieldError({ message }: { message?: string }) {
-  if (!message) return null;
-  return <p className="mt-1 text-xs text-red-500">{message}</p>;
-}
-
-function SuccessItem({ item }: { item: CostingItem }) {
-  return <>{item.productName}</>;
-}
+function FieldError({ message }: { message?: string }) { if (!message) return null; return <p className="mt-1 text-xs text-red-500">{message}</p>; }
+function SuccessItem({ item }: { item: CostingItem }) { return <>{item.productName}</>; }
 
 export function QuotationForm({ customers, destinations, incoterms, paymentTerms, products }: Props) {
   const [loading, setLoading] = useState(false);
@@ -91,11 +56,7 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
     getProductStockLevels().then(setProductStock).catch(() => setProductStock({})).finally(() => setLoadingStock(false));
   }, []);
 
-  const { register, control, handleSubmit, setValue, formState: { errors } } = useForm<QuotationFormValues>({
-    resolver: zodResolver(quotationSchema),
-    defaultValues: { deliveryType: "local", creditDays: 0, items: [{ productId: "", quantityKg: 0, targetProfitPct: 5 }] },
-  });
-
+  const { register, control, handleSubmit, setValue, formState: { errors } } = useForm<QuotationFormValues>({ resolver: zodResolver(quotationSchema), defaultValues: { deliveryType: "local", creditDays: 0, items: [{ productId: "", quantityKg: 0, targetProfitPct: 5 }] } });
   const { fields, append, remove } = useFieldArray({ control, name: "items" });
   const watchedValues = useWatch({ control });
   const watchedItems = watchedValues.items ?? [];
@@ -110,41 +71,21 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
     const matched = customerProducts.filter((item) => item.product_id && item.product_match_status === "matched").map((item) => ({ id: item.product_id as string, name: item.product_name_original }));
     const unique = Array.from(new Map(matched.map((item) => [item.id, item])).values());
     const ids = new Set(unique.map((item) => item.id));
-    const combined = [...unique, ...products.filter((product) => !ids.has(product.id))];
-    return combined.map((product) => {
-      const stock = productStock[product.id] ?? 0;
-      if (loadingStock) return product;
-      return { ...product, name: stock <= 0 ? `🔴 ${product.name} — OUT OF STOCK` : `${product.name} — ${number(stock)} kg available` };
-    });
-  }, [customerProducts, products, productStock, loadingStock]);
+    return [...unique, ...products.filter((product) => !ids.has(product.id))];
+  }, [customerProducts, products]);
 
   async function handleCustomerChange(nextCustomerId: string) {
     setValue("customerId", nextCustomerId, { shouldValidate: true, shouldDirty: true });
     setValue("items", [{ productId: "", quantityKg: 0, targetProfitPct: 5 }]);
-    setOverrides({});
-    setPreviewResult(null);
-    setResult(null);
-    setSubmitError(null);
-    if (!nextCustomerId) {
-      setCustomerProducts([]);
-      return;
-    }
-    try {
-      setCustomerProducts(await getCustomerProducts(nextCustomerId));
-    } catch {
-      setCustomerProducts([]);
-    }
+    setOverrides({}); setPreviewResult(null); setResult(null); setSubmitError(null);
+    if (!nextCustomerId) { setCustomerProducts([]); return; }
+    try { setCustomerProducts(await getCustomerProducts(nextCustomerId)); } catch { setCustomerProducts([]); }
   }
 
   useEffect(() => {
     const totalQuantity = watchedItems.reduce((sum, item) => sum + Number(item.quantityKg || 0), 0);
     const vehicleType = getVehicleIdForQuantity(totalQuantity, vehicleTypes);
-
-    if (!customerId || !destinationId || !incoterm || !paymentTerm || !Number.isFinite(creditDays) || !vehicleType || !watchedItems.some((item) => item.productId && Number(item.quantityKg) > 0)) {
-      setPreviewResult(null);
-      return;
-    }
-
+    if (!customerId || !destinationId || !incoterm || !paymentTerm || !Number.isFinite(creditDays) || !vehicleType || !watchedItems.some((item) => item.productId && Number(item.quantityKg) > 0)) { setPreviewResult(null); return; }
     const timer = window.setTimeout(async () => {
       setPreviewLoading(true);
       try {
@@ -153,48 +94,27 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
           const override = overrides[index] ?? {};
           return [{ productId: item.productId, quantityKg: Number(item.quantityKg), targetProfitPct: Number(item.targetProfitPct ?? 0), warehouseDaysOverride: override.warehouseDays, transportCostOverrideAed: override.transport, manualOtherCostAed: override.other }];
         });
-        const preview = await previewQuotation({ customerId, deliveryType, destinationId, incoterm, paymentTerm, creditDays, vehicleType, freightAed: 0, items: validItems });
-        setPreviewResult(preview);
-      } catch (error) {
-        setPreviewResult({ success: false, error: error instanceof Error ? error.message : "Unable to preview costing." });
-      } finally {
-        setPreviewLoading(false);
-      }
+        setPreviewResult(await previewQuotation({ customerId, deliveryType, destinationId, incoterm, paymentTerm, creditDays, vehicleType, freightAed: 0, items: validItems }));
+      } catch (error) { setPreviewResult({ success: false, error: error instanceof Error ? error.message : "Unable to preview costing." }); }
+      finally { setPreviewLoading(false); }
     }, 450);
-
     return () => window.clearTimeout(timer);
   }, [customerId, deliveryType, destinationId, incoterm, paymentTerm, creditDays, watchedItems, vehicleTypes, overrides]);
 
-  function updateOverride(index: number, key: keyof CostOverrides, value: string) {
-    const numeric = value === "" ? undefined : Number(value);
-    setOverrides((current) => ({ ...current, [index]: { ...current[index], [key]: numeric } }));
-  }
-
-  function clearItemOverride(index: number) {
-    setOverrides((current) => {
-      const next = { ...current };
-      delete next[index];
-      return next;
-    });
-  }
+  function updateOverride(index: number, key: keyof CostOverrides, value: string) { const numeric = value === "" ? undefined : Number(value); setOverrides((current) => ({ ...current, [index]: { ...current[index], [key]: numeric } })); }
+  function clearItemOverride(index: number) { setOverrides((current) => { const next = { ...current }; delete next[index]; return next; }); }
 
   async function onSubmit(values: QuotationFormValues) {
-    setLoading(true);
-    setResult(null);
-    setSubmitError(null);
+    setLoading(true); setResult(null); setSubmitError(null);
     try {
       if (loadingVehicles) throw new Error("Vehicle types are still loading. Please try again.");
       const totalQuantity = values.items.reduce((sum, item) => sum + item.quantityKg, 0);
       const vehicleType = getVehicleIdForQuantity(totalQuantity, vehicleTypes);
       if (!vehicleType) throw new Error("No suitable vehicle type is configured.");
       const calculation = await calculateQuotation({ ...values, vehicleType, freightAed: 0, items: values.items.map((item, index) => ({ ...item, warehouseDaysOverride: overrides[index]?.warehouseDays, transportCostOverrideAed: overrides[index]?.transport, manualOtherCostAed: overrides[index]?.other })) });
-      setResult(calculation);
-      if (!calculation.success) setSubmitError(calculation.error);
-    } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "Failed to calculate quotation.");
-    } finally {
-      setLoading(false);
-    }
+      setResult(calculation); if (!calculation.success) setSubmitError(calculation.error);
+    } catch (error) { setSubmitError(error instanceof Error ? error.message : "Failed to calculate quotation."); }
+    finally { setLoading(false); }
   }
 
   const liveItems: CostingItem[] = previewResult?.success && previewResult.role === "finance_admin" ? previewResult.items : [];
@@ -231,7 +151,7 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
                 const projectedRemaining = availableStock === null ? null : availableStock - enteredQuantity;
                 return <tr key={field.id}>
                   <td className="px-6 py-4 text-zinc-400">{index + 1}</td>
-                  <td className="px-6 py-4"><Controller control={control} name={`items.${index}.productId`} render={({ field: productField }) => <SearchableSelect options={productOptions} value={productField.value} onChange={(value) => { productField.onChange(value); clearItemOverride(index); }} placeholder="Select product" searchPlaceholder="Search products..." />} /><FieldError message={errors.items?.[index]?.productId?.message} /></td>
+                  <td className="px-6 py-4"><Controller control={control} name={`items.${index}.productId`} render={({ field: productField }) => <SearchableSelect options={productOptions} value={productField.value} onChange={(value) => { productField.onChange(value); clearItemOverride(index); }} optionClassName={(option) => !loadingStock && (productStock[option.id] ?? 0) <= 0 ? "bg-red-50 text-red-700 hover:bg-red-100" : ""} optionSuffix={(option) => !loadingStock ? <span className={(productStock[option.id] ?? 0) <= 0 ? "font-medium text-red-600" : "text-zinc-400"}>{(productStock[option.id] ?? 0) <= 0 ? "Out of stock" : `${number(productStock[option.id] ?? 0)} kg`}</span> : null} placeholder="Select product" searchPlaceholder="Search products..." />} /><FieldError message={errors.items?.[index]?.productId?.message} /></td>
                   <td className="px-6 py-4"><input type="number" min="0.01" step="0.01" {...register(`items.${index}.quantityKg`, { valueAsNumber: true })} className="w-full rounded-lg border px-3 py-2.5 outline-none" placeholder="0" />{selectedProductId && <div className="mt-1.5 space-y-0.5 text-xs"><p className="text-zinc-500">Available: <span className="font-medium text-zinc-700">{loadingStock ? "Checking…" : `${number(availableStock ?? 0)} kg`}</span></p>{!loadingStock && projectedRemaining !== null && enteredQuantity > 0 && <p className={projectedRemaining < 0 ? "font-medium text-red-600" : "text-emerald-700"}>{projectedRemaining < 0 ? `Insufficient stock: ${number(Math.abs(projectedRemaining))} kg short` : `Projected remaining: ${number(projectedRemaining)} kg`}</p>}</div>}<FieldError message={errors.items?.[index]?.quantityKg?.message} /></td>
                   <td className="px-6 py-4"><div className="relative max-w-[150px]"><input type="number" min="0" max="99.99" step="0.01" {...register(`items.${index}.targetProfitPct`, { valueAsNumber: true })} className="w-full rounded-lg border px-3 py-2.5 pr-8 outline-none" /><span className="absolute right-3 top-2.5 text-zinc-400">%</span></div></td>
                   <td className="px-4 py-4 text-right">{fields.length > 1 && <button type="button" onClick={() => { remove(index); clearItemOverride(index); }} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={16} /></button>}</td>
