@@ -13,6 +13,15 @@ const schema = z.object({
   inwardClearanceCharge: z.coerce.number().nonnegative().default(0), inwardBankCharge: z.coerce.number().nonnegative().default(0), outwardClearanceCharge: z.coerce.number().nonnegative().default(0), outwardTransportCharge: z.coerce.number().nonnegative().default(0), freight: z.coerce.number().nonnegative().default(0), insurance: z.coerce.number().nonnegative().default(0), otherExpense: z.coerce.number().nonnegative().default(0), financeCharge: z.coerce.number().nonnegative().default(0), items: z.string().min(2),
 });
 
+type IncotermChargeRule = {
+  cost_code: string;
+  enabled: boolean;
+  calculation_type: string;
+  amount_aed: number | string | null;
+  rate_pct: number | string | null;
+  multiplier: number | string | null;
+};
+
 function parseLines(raw: string) {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { throw new Error("Invalid purchase items."); }
@@ -22,7 +31,7 @@ function parseLines(raw: string) {
   return parsed.data;
 }
 
-function resolveCharge(rule: any | undefined, manualValue: number, exWorks: number) {
+function resolveCharge(rule: IncotermChargeRule | undefined, manualValue: number, exWorks: number) {
   if (manualValue > 0) return manualValue;
   if (!rule || !rule.enabled || rule.calculation_type === "disabled") return 0;
   if (rule.calculation_type === "fixed" || rule.calculation_type === "manual") return Number(rule.amount_aed ?? 0);
@@ -48,7 +57,7 @@ export async function createPurchaseOrder(formData: FormData) {
   if (!products || products.length !== lines.length) throw new Error("One or more selected products could not be found.");
 
   const exWorks = lines.reduce((sum, line) => sum + line.qtyKg * line.unitExWorksCostAed, 0);
-  const rule = (code: string) => (rules ?? []).find((row) => row.cost_code === code);
+  const rule = (code: string) => (rules ?? []).find((row) => row.cost_code === code) as IncotermChargeRule | undefined;
   const costs = {
     inwardClearanceCharge: resolveCharge(rule("inward_clearance"), input.inwardClearanceCharge, exWorks),
     inwardBankCharge: resolveCharge(rule("inward_bank"), input.inwardBankCharge, exWorks),
