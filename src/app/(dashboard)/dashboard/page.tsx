@@ -4,6 +4,16 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 function money(value: number) { return new Intl.NumberFormat("en-AE", { style: "currency", currency: "AED", minimumFractionDigits: 2 }).format(value); }
 
+function statusClass(status: string) {
+  switch (status) {
+    case "won": case "fulfilled": case "received": return "bg-emerald-50 text-emerald-700";
+    case "sent": case "confirmed": case "ordered": return "bg-blue-50 text-blue-700";
+    case "pending_approval": case "partially_fulfilled": case "partially_received": return "bg-amber-50 text-amber-700";
+    case "lost": case "cancelled": return "bg-red-50 text-red-700";
+    default: return "bg-zinc-100 text-zinc-600";
+  }
+}
+
 export default async function DashboardPage() {
   const { profile } = await requireUser();
   const admin = createAdminClient();
@@ -32,7 +42,7 @@ export default async function DashboardPage() {
         {[['Recent Quotes', recentQuotes.length.toString(), money(quoteSales)], ['Orders', recentOrders.length.toString(), money(orderSales)], ['Purchases', recentPurchases.length.toString(), money(purchaseValue)], ['Products', (products.count ?? 0).toString(), 'active catalog']].map(([label, value, sub]) => <div key={label} className="rounded-xl border bg-white p-5 shadow-sm"><p className="text-xs uppercase tracking-wide text-zinc-400">{label}</p><p className="mt-2 text-2xl font-semibold">{value}</p><p className="mt-1 text-sm text-zinc-500">{sub}</p></div>)}
       </div>
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <section className="rounded-xl border bg-white shadow-sm"><div className="flex items-center justify-between border-b p-5"><h2 className="font-semibold">Recent Quotations</h2><Link href="/quotations" className="text-sm text-zinc-500 hover:text-zinc-900">View all</Link></div><div className="divide-y">{recentQuotes.length === 0 ? <p className="p-8 text-sm text-zinc-500">No quotations yet.</p> : recentQuotes.slice(0, 5).map(q => <Link key={q.id} href={`/quotations/${q.id}`} className="flex items-center justify-between p-4 hover:bg-zinc-50"><div><p className="text-sm font-medium">{q.quote_number}</p><p className="text-xs text-zinc-500">{q.customer_name_snapshot}</p></div><div className="text-right"><p className="text-sm font-medium">{money(Number(q.total_sales))}</p><p className="text-xs capitalize text-zinc-500">{q.status.replaceAll('_', ' ')}</p></div></Link>)}</div></section>
+        <section className="rounded-xl border bg-white shadow-sm"><div className="flex items-center justify-between border-b p-5"><h2 className="font-semibold">Recent Quotations</h2><Link href="/quotations" className="text-sm text-zinc-500 hover:text-zinc-900">View all</Link></div><div className="divide-y">{recentQuotes.length === 0 ? <p className="p-8 text-sm text-zinc-500">No quotations yet.</p> : recentQuotes.slice(0, 5).map(q => <Link key={q.id} href={`/quotations/${q.id}`} className="flex items-center justify-between p-4 hover:bg-zinc-50"><div><p className="text-sm font-medium">{q.quote_number}</p><p className="text-xs text-zinc-500">{q.customer_name_snapshot}</p></div><div className="flex items-center gap-3 text-right"><p className="text-sm font-medium">{money(Number(q.total_sales))}</p><span className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize ${statusClass(q.status)}`}>{q.status.replaceAll('_', ' ')}</span></div></Link>)}</div></section>
         <section className="rounded-xl border bg-white shadow-sm"><div className="flex items-center justify-between border-b p-5"><h2 className="font-semibold">Inventory Watch</h2><Link href="/inventory" className="text-sm text-zinc-500 hover:text-zinc-900">View inventory</Link></div><div className="divide-y">{lowStock.length === 0 ? <p className="p-8 text-sm text-zinc-500">No zero/negative stock detected.</p> : lowStock.map(row => <div key={row.product_id} className="flex items-center justify-between p-4"><p className="text-sm font-medium">{row.product_name}</p><p className="text-sm font-medium text-red-600">{Number(row.quantity_kg).toLocaleString()} kg</p></div>)}</div></section>
       </div>
       <div className="mt-6 grid gap-4 sm:grid-cols-3"><Link href="/quotations/new" className="rounded-xl border bg-white p-5 shadow-sm hover:bg-zinc-50"><p className="font-medium">New Quotation</p><p className="mt-1 text-sm text-zinc-500">Calculate landed cost and selling price.</p></Link><Link href="/orders" className="rounded-xl border bg-white p-5 shadow-sm hover:bg-zinc-50"><p className="font-medium">Manage Orders</p><p className="mt-1 text-sm text-zinc-500">Convert quotations and track fulfillment.</p></Link><Link href="/purchases" className="rounded-xl border bg-white p-5 shadow-sm hover:bg-zinc-50"><p className="font-medium">Manage Purchases</p><p className="mt-1 text-sm text-zinc-500">Create POs and receive stock.</p></Link></div>
