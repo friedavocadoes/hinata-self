@@ -6,6 +6,7 @@ import {
   getVehicleTypes,
   previewQuotation,
 } from "@/app/(dashboard)/quotations/new/actions";
+import { getProductStockLevels } from "@/app/(dashboard)/quotations/remove-actions";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useEffect, useMemo, useState } from "react";
 import { Controller, useFieldArray, useForm, useWatch } from "react-hook-form";
@@ -76,7 +77,9 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [loadingVehicles, setLoadingVehicles] = useState(true);
+  const [loadingStock, setLoadingStock] = useState(true);
   const [vehicleTypes, setVehicleTypes] = useState<Option[]>([]);
+  const [productStock, setProductStock] = useState<Record<string, number>>({});
   const [customerProducts, setCustomerProducts] = useState<Awaited<ReturnType<typeof getCustomerProducts>>>([]);
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
   const [result, setResult] = useState<CalculationResult | null>(null);
@@ -85,6 +88,7 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
 
   useEffect(() => {
     getVehicleTypes().then(setVehicleTypes).catch(() => setVehicleTypes([])).finally(() => setLoadingVehicles(false));
+    getProductStockLevels().then(setProductStock).catch(() => setProductStock({})).finally(() => setLoadingStock(false));
   }, []);
 
   const { register, control, handleSubmit, setValue, formState: { errors } } = useForm<QuotationFormValues>({
@@ -106,8 +110,13 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
     const matched = customerProducts.filter((item) => item.product_id && item.product_match_status === "matched").map((item) => ({ id: item.product_id as string, name: item.product_name_original }));
     const unique = Array.from(new Map(matched.map((item) => [item.id, item])).values());
     const ids = new Set(unique.map((item) => item.id));
-    return [...unique, ...products.filter((product) => !ids.has(product.id))];
-  }, [customerProducts, products]);
+    const combined = [...unique, ...products.filter((product) => !ids.has(product.id))];
+    return combined.map((product) => {
+      const stock = productStock[product.id] ?? 0;
+      if (loadingStock) return product;
+      return { ...product, name: stock <= 0 ? `🔴 ${product.name} — OUT OF STOCK` : `${product.name} — ${number(stock)} kg available` };
+    });
+  }, [customerProducts, products, productStock, loadingStock]);
 
   async function handleCustomerChange(nextCustomerId: string) {
     setValue("customerId", nextCustomerId, { shouldValidate: true, shouldDirty: true });
@@ -142,27 +151,9 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
         const validItems = watchedItems.flatMap((item, index) => {
           if (!item.productId || Number(item.quantityKg) <= 0) return [];
           const override = overrides[index] ?? {};
-          return [{
-            productId: item.productId,
-            quantityKg: Number(item.quantityKg),
-            targetProfitPct: Number(item.targetProfitPct ?? 0),
-            warehouseDaysOverride: override.warehouseDays,
-            transportCostOverrideAed: override.transport,
-            manualOtherCostAed: override.other,
-          }];
+          return [{ productId: item.productId, quantityKg: Number(item.quantityKg), targetProfitPct: Number(item.targetProfitPct ?? 0), warehouseDaysOverride: override.warehouseDays, transportCostOverrideAed: override.transport, manualOtherCostAed: override.other }];
         });
-
-        const preview = await previewQuotation({
-          customerId,
-          deliveryType,
-          destinationId,
-          incoterm,
-          paymentTerm,
-          creditDays,
-          vehicleType,
-          freightAed: 0,
-          items: validItems,
-        });
+        const preview = await previewQuotation({ customerId, deliveryType, destinationId, incoterm, paymentTerm, creditDays, vehicleType, freightAed: 0, items: validItems });
         setPreviewResult(preview);
       } catch (error) {
         setPreviewResult({ success: false, error: error instanceof Error ? error.message : "Unable to preview costing." });
@@ -196,18 +187,7 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
       const totalQuantity = values.items.reduce((sum, item) => sum + item.quantityKg, 0);
       const vehicleType = getVehicleIdForQuantity(totalQuantity, vehicleTypes);
       if (!vehicleType) throw new Error("No suitable vehicle type is configured.");
-
-      const calculation = await calculateQuotation({
-        ...values,
-        vehicleType,
-        freightAed: 0,
-        items: values.items.map((item, index) => ({
-          ...item,
-          warehouseDaysOverride: overrides[index]?.warehouseDays,
-          transportCostOverrideAed: overrides[index]?.transport,
-          manualOtherCostAed: overrides[index]?.other,
-        })),
-      });
+      const calculation = await calculateQuotation({ ...values, vehicleType, freightAed: 0, items: values.items.map((item, index) => ({ ...item, warehouseDaysOverride: overrides[index]?.warehouseDays, transportCostOverrideAed: overrides[index]?.transport, manualOtherCostAed: overrides[index]?.other })) });
       setResult(calculation);
       if (!calculation.success) setSubmitError(calculation.error);
     } catch (error) {
@@ -244,7 +224,19 @@ export function QuotationForm({ customers, destinations, incoterms, paymentTerms
           <div className="flex items-center justify-between border-b p-6"><div><h2 className="text-base font-semibold">Line Items</h2><p className="mt-1 text-sm text-zinc-500">Set quantity and margin. Costing below updates automatically from current stock and rules.</p></div><button type="button" onClick={() => append({ productId: "", quantityKg: 0, targetProfitPct: 5 })} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-zinc-50"><Plus size={16} /> Add Product</button></div>
           <div className="overflow-visible">
             <table className="w-full min-w-[760px] text-sm"><thead className="border-b bg-zinc-50"><tr><th className="px-6 py-3 text-left font-medium">#</th><th className="px-6 py-3 text-left font-medium">Product</th><th className="px-6 py-3 text-left font-medium">Quantity (kg)</th><th className="px-6 py-3 text-left font-medium">Margin %</th><th className="w-12 px-4 py-3" /></tr></thead><tbody className="divide-y">
-              {fields.map((field, index) => <tr key={field.id}><td className="px-6 py-4 text-zinc-400">{index + 1}</td><td className="px-6 py-4"><Controller control={control} name={`items.${index}.productId`} render={({ field: productField }) => <SearchableSelect options={productOptions} value={productField.value} onChange={(value) => { productField.onChange(value); clearItemOverride(index); }} placeholder="Select product" searchPlaceholder="Search products..." />} /><FieldError message={errors.items?.[index]?.productId?.message} /></td><td className="px-6 py-4"><input type="number" min="0.01" step="0.01" {...register(`items.${index}.quantityKg`, { valueAsNumber: true })} className="w-full rounded-lg border px-3 py-2.5 outline-none" placeholder="0" /><FieldError message={errors.items?.[index]?.quantityKg?.message} /></td><td className="px-6 py-4"><div className="relative max-w-[150px]"><input type="number" min="0" max="99.99" step="0.01" {...register(`items.${index}.targetProfitPct`, { valueAsNumber: true })} className="w-full rounded-lg border px-3 py-2.5 pr-8 outline-none" /><span className="absolute right-3 top-2.5 text-zinc-400">%</span></div></td><td className="px-4 py-4 text-right">{fields.length > 1 && <button type="button" onClick={() => { remove(index); clearItemOverride(index); }} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={16} /></button>}</td></tr>)}
+              {fields.map((field, index) => {
+                const selectedProductId = watchedItems[index]?.productId;
+                const availableStock = selectedProductId ? productStock[selectedProductId] ?? 0 : null;
+                const enteredQuantity = Number(watchedItems[index]?.quantityKg || 0);
+                const projectedRemaining = availableStock === null ? null : availableStock - enteredQuantity;
+                return <tr key={field.id}>
+                  <td className="px-6 py-4 text-zinc-400">{index + 1}</td>
+                  <td className="px-6 py-4"><Controller control={control} name={`items.${index}.productId`} render={({ field: productField }) => <SearchableSelect options={productOptions} value={productField.value} onChange={(value) => { productField.onChange(value); clearItemOverride(index); }} placeholder="Select product" searchPlaceholder="Search products..." />} /><FieldError message={errors.items?.[index]?.productId?.message} /></td>
+                  <td className="px-6 py-4"><input type="number" min="0.01" step="0.01" {...register(`items.${index}.quantityKg`, { valueAsNumber: true })} className="w-full rounded-lg border px-3 py-2.5 outline-none" placeholder="0" />{selectedProductId && <div className="mt-1.5 space-y-0.5 text-xs"><p className="text-zinc-500">Available: <span className="font-medium text-zinc-700">{loadingStock ? "Checking…" : `${number(availableStock ?? 0)} kg`}</span></p>{!loadingStock && projectedRemaining !== null && enteredQuantity > 0 && <p className={projectedRemaining < 0 ? "font-medium text-red-600" : "text-emerald-700"}>{projectedRemaining < 0 ? `Insufficient stock: ${number(Math.abs(projectedRemaining))} kg short` : `Projected remaining: ${number(projectedRemaining)} kg`}</p>}</div>}<FieldError message={errors.items?.[index]?.quantityKg?.message} /></td>
+                  <td className="px-6 py-4"><div className="relative max-w-[150px]"><input type="number" min="0" max="99.99" step="0.01" {...register(`items.${index}.targetProfitPct`, { valueAsNumber: true })} className="w-full rounded-lg border px-3 py-2.5 pr-8 outline-none" /><span className="absolute right-3 top-2.5 text-zinc-400">%</span></div></td>
+                  <td className="px-4 py-4 text-right">{fields.length > 1 && <button type="button" onClick={() => { remove(index); clearItemOverride(index); }} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={16} /></button>}</td>
+                </tr>;
+              })}
             </tbody></table>
           </div>
         </section>
