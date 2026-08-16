@@ -9,7 +9,7 @@ import { CostingInput, CostingSettings } from "@/lib/costing/types";
 
 /*
  * ============================================================
- * QUOTATION CALCULATION SCHEMA
+ * VALIDATION
  * ============================================================
  */
 
@@ -20,26 +20,22 @@ const calculateSchema = z.object({
 
   destinationId: z.string().uuid(),
 
-  incoterm: z.string().min(1),
+  incoterm: z.string().uuid(),
 
-  paymentTerm: z.string().min(1),
+  paymentTerm: z.string().uuid(),
 
-  creditDays: z.number().min(0),
+  creditDays: z.number().finite().min(0),
 
-  /*
-   * Vehicle capacity is required because transport rates
-   * depend on both destination AND vehicle size.
-   */
-  vehicleType: z.string().min(1),
+  vehicleType: z.string().uuid(),
 
   items: z
     .array(
       z.object({
         productId: z.string().uuid(),
 
-        quantityKg: z.number().positive(),
+        quantityKg: z.number().finite().positive(),
 
-        targetProfitPct: z.number().min(0).lt(100),
+        targetProfitPct: z.number().finite().min(0).lt(100),
       }),
     )
     .min(1),
@@ -49,14 +45,14 @@ type CalculationInput = z.infer<typeof calculateSchema>;
 
 /*
  * ============================================================
- * GLOBAL SETTINGS
+ * SETTINGS
  * ============================================================
  */
 
 function settingsFromRows(
   rows: {
     setting_key: string;
-    setting_value: number;
+    setting_value: number | string;
   }[],
 ): CostingSettings {
   const settings = Object.fromEntries(
@@ -92,13 +88,11 @@ function settingsFromRows(
 
     customer_bank_draft_flat_fee: settings.customer_bank_draft_flat_fee,
 
-    marine_insurance_base_pct: settings.marine_insurance_base_pct ?? 0.0007,
+    marine_insurance_base_pct: settings.marine_insurance_base_pct,
 
-    marine_insurance_cif_multiplier:
-      settings.marine_insurance_cif_multiplier ?? 1.1,
+    marine_insurance_cif_multiplier: settings.marine_insurance_cif_multiplier,
 
-    marine_insurance_fob_multiplier:
-      settings.marine_insurance_fob_multiplier ?? 1.2,
+    marine_insurance_fob_multiplier: settings.marine_insurance_fob_multiplier,
 
     courier_local_aed: settings.courier_local_aed,
 
@@ -114,6 +108,20 @@ function settingsFromRows(
 
 /*
  * ============================================================
+ * NUMBER SAFETY
+ * ============================================================
+ */
+
+function assertFiniteNumber(value: number, field: string) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(
+      `Costing calculation produced an invalid value for "${field}".`,
+    );
+  }
+}
+
+/*
+ * ============================================================
  * CALCULATE QUOTATION
  * ============================================================
  */
@@ -122,8 +130,9 @@ export async function calculateQuotation(rawInput: CalculationInput) {
   const { profile } = await requireUser();
 
   /*
-   * Validate everything before touching the database.
+   * Validate incoming data.
    */
+
   const parsed = calculateSchema.safeParse(rawInput);
 
   if (!parsed.success) {
@@ -139,11 +148,8 @@ export async function calculateQuotation(rawInput: CalculationInput) {
 
   /*
    * ==========================================================
-   * LOAD GLOBAL DATA
+   * LOAD MASTER DATA
    * ==========================================================
-   *
-   * These values come from the database.
-   * Nothing financial is hardcoded here.
    */
 
   const [
@@ -151,19 +157,19 @@ export async function calculateQuotation(rawInput: CalculationInput) {
     destinationResult,
     incotermResult,
     paymentTermResult,
-    transportResult,
+    vehicleResult,
   ] = await Promise.all([
     supabase.from("global_settings").select("setting_key, setting_value"),
 
     supabase
       .from("destinations")
-      .select("id, name, code")
+      .select("id, name, code, delivery_type, region")
       .eq("id", input.destinationId)
       .single(),
 
     supabase
       .from("incoterms")
-      .select("id, name, code")
+      .select("id, name, code, delivery_type")
       .eq("id", input.incoterm)
       .single(),
 
@@ -173,27 +179,20 @@ export async function calculateQuotation(rawInput: CalculationInput) {
       .eq("id", input.paymentTerm)
       .single(),
 
-    /*
-     * Transport is determined by:
-     *
-     * Destination
-     * +
-     * Vehicle capacity
-     */
     supabase
-      .from("transport_rates")
-      .select("id, rate_aed, destination_id, truck_size")
-      .eq("destination_id", input.destinationId)
-      .eq("truck_size", input.vehicleType)
+      .from("vehicle_types")
+      .select(
+        `
+          id,
+          code,
+          name,
+          capacity_kg
+        `,
+      )
+      .eq("id", input.vehicleType)
       .eq("active", true)
-      .maybeSingle(),
+      .single(),
   ]);
-
-  /*
-   * ==========================================================
-   * ERROR HANDLING
-   * ==========================================================
-   */
 
   if (settingsResult.error) {
     throw new Error(settingsResult.error.message);
@@ -211,37 +210,62 @@ export async function calculateQuotation(rawInput: CalculationInput) {
     throw new Error(paymentTermResult.error.message);
   }
 
+  if (vehicleResult.error) {
+    throw new Error(vehicleResult.error.message);
+  }
+
+  const settings = settingsFromRows(settingsResult.data);
+
+  const destination = destinationResult.data;
+
+  const incoterm = incotermResult.data;
+
+  const paymentTerm = paymentTermResult.data;
+
+  const vehicle = vehicleResult.data;
+
+  /*
+   * ==========================================================
+   * TRANSPORT
+   * ==========================================================
+   *
+   * Local deliveries require a transport rate.
+   *
+   * Export / port destinations may legitimately have
+   * no local truck rate, so don't blindly reject them.
+   */
+
+  const transportResult = await supabase
+    .from("transport_rates")
+    .select(
+      `
+          id,
+          destination_id,
+          vehicle_type_id,
+          rate_aed
+        `,
+    )
+    .eq("destination_id", input.destinationId)
+    .eq("vehicle_type_id", input.vehicleType)
+    .eq("active", true)
+    .maybeSingle();
+
   if (transportResult.error) {
     throw new Error(transportResult.error.message);
   }
 
+  const transport = transportResult.data;
+
   /*
-   * A transport rate should exist for a valid
-   * destination + vehicle combination.
+   * A local delivery without a transport rate
+   * is a genuine configuration problem.
    */
-  if (!transportResult.data) {
+
+  if (input.deliveryType === "local" && !transport) {
     throw new Error(
-      `No transport rate found for the selected destination and vehicle type.`,
+      `No transport rate is configured for ${destination.name} using ${vehicle.name}.`,
     );
   }
-
-  /*
-   * ==========================================================
-   * PREPARE CALCULATION SETTINGS
-   * ==========================================================
-   */
-
-  const settings = settingsFromRows(settingsResult.data);
-
-  /*
-   * The calculation engine works with database codes,
-   * not UUIDs.
-   */
-  const incoterm = incotermResult.data.code;
-
-  const paymentTerm = paymentTermResult.data.code;
-
-  const transport = transportResult.data;
 
   /*
    * ==========================================================
@@ -256,14 +280,20 @@ export async function calculateQuotation(rawInput: CalculationInput) {
     .select(
       `
           id,
+          name,
+          pack_size_kg,
           cif_rate_usd,
           inward_clearance_charge,
           storage_rate,
           storage_days,
-          default_profit_pct
+          default_profit_pct,
+          supplier_id,
+          supplier_mop,
+          supplier_credit_days
         `,
     )
-    .in("id", productIds);
+    .in("id", productIds)
+    .eq("active", true);
 
   if (productsResult.error) {
     throw new Error(productsResult.error.message);
@@ -272,8 +302,18 @@ export async function calculateQuotation(rawInput: CalculationInput) {
   const products = productsResult.data;
 
   /*
+   * Ensure every requested product was found.
+   */
+
+  if (products.length !== productIds.length) {
+    throw new Error(
+      "One or more selected products could not be found or are inactive.",
+    );
+  }
+
+  /*
    * ==========================================================
-   * CALCULATE EACH LINE ITEM
+   * CALCULATE ITEMS
    * ==========================================================
    */
 
@@ -283,8 +323,56 @@ export async function calculateQuotation(rawInput: CalculationInput) {
     const product = products.find((product) => product.id === item.productId);
 
     if (!product) {
-      throw new Error("One of the selected products could not be found.");
+      throw new Error("Selected product could not be found.");
     }
+
+    /*
+     * Defensive normalization.
+     *
+     * The database now guarantees storage_rate is non-null,
+     * but keeping this fallback makes the calculation layer
+     * resilient to future imports.
+     */
+
+    const normalizedProduct = {
+      ...product,
+
+      pack_size_kg: Number(product.pack_size_kg),
+
+      cif_rate_usd: Number(product.cif_rate_usd),
+
+      inward_clearance_charge: Number(product.inward_clearance_charge ?? 0),
+
+      storage_rate: Number(product.storage_rate ?? 0),
+
+      storage_days: Number(product.storage_days ?? 0),
+
+      default_profit_pct: Number(product.default_profit_pct ?? 0),
+
+      supplier_credit_days: Number(product.supplier_credit_days ?? 0),
+    };
+
+    /*
+     * Validate master-data numbers before
+     * sending them into the financial engine.
+     */
+
+    assertFiniteNumber(normalizedProduct.cif_rate_usd, "CIF rate");
+
+    assertFiniteNumber(
+      normalizedProduct.inward_clearance_charge,
+      "Inward clearance",
+    );
+
+    assertFiniteNumber(normalizedProduct.storage_rate, "Storage rate");
+
+    assertFiniteNumber(normalizedProduct.storage_days, "Storage days");
+
+    /*
+     * ========================================================
+     * ENGINE INPUT
+     * ========================================================
+     */
 
     const costingInput: CostingInput = {
       productId: item.productId,
@@ -295,29 +383,73 @@ export async function calculateQuotation(rawInput: CalculationInput) {
 
       destinationId: input.destinationId,
 
-      incoterm,
+      incoterm: incoterm.code,
 
-      paymentTerm,
+      paymentTerm: paymentTerm.code,
 
       creditDays: input.creditDays,
 
       targetProfitPct: item.targetProfitPct,
 
-      /*
-       * Vehicle capacity is now passed
-       * to the costing engine.
-       */
       vehicleType: input.vehicleType,
     };
 
     const result = calculateCosting(costingInput, {
-      product,
+      product: normalizedProduct,
+
       settings,
+
       transport,
+
+      vehicle: {
+        code: vehicle.code,
+
+        capacity_kg: vehicle.capacity_kg ? Number(vehicle.capacity_kg) : null,
+      },
+
+      destination: {
+        code: destination.code,
+
+        region: destination.region,
+      },
     });
+
+    /*
+     * ========================================================
+     * FINANCIAL SANITY CHECK
+     * ========================================================
+     */
+
+    const numericFields = [
+      "exWorksCost",
+      "inwardClearance",
+      "inwardBankCharge",
+      "storageCharge",
+      "outwardClearance",
+      "outwardTransport",
+      "freight",
+      "insurance",
+      "otherExpense",
+      "bankFinanceCharge",
+      "capitalInterest",
+      "customsDuty",
+      "totalCost",
+      "costPerUnit",
+      "salesUnitPrice",
+      "salesPrice",
+      "profitAmount",
+      "finalMarginPct",
+    ] as const;
+
+    for (const field of numericFields) {
+      if (field in result) {
+        assertFiniteNumber(Number(result[field as keyof typeof result]), field);
+      }
+    }
 
     results.push({
       productId: item.productId,
+      productName: product.name,
 
       ...result,
     });
@@ -329,19 +461,31 @@ export async function calculateQuotation(rawInput: CalculationInput) {
    * ==========================================================
    */
 
-  const totalSales = results.reduce((sum, item) => sum + item.salesPrice, 0);
+  const totalSales = results.reduce(
+    (sum, item) => sum + Number(item.salesPrice),
+    0,
+  );
 
-  const totalCost = results.reduce((sum, item) => sum + item.totalCost, 0);
+  const totalCost = results.reduce(
+    (sum, item) => sum + Number(item.totalCost),
+    0,
+  );
 
-  const totalProfit = results.reduce((sum, item) => sum + item.profitAmount, 0);
+  const totalProfit = results.reduce(
+    (sum, item) => sum + Number(item.profitAmount),
+    0,
+  );
+
+  assertFiniteNumber(totalSales, "Total sales");
+
+  assertFiniteNumber(totalCost, "Total cost");
+
+  assertFiniteNumber(totalProfit, "Total profit");
 
   /*
    * ==========================================================
    * ROLE-BASED RESPONSE
    * ==========================================================
-   *
-   * Sales representatives MUST NOT receive internal
-   * costing information.
    */
 
   if (profile?.role === "finance_admin") {
@@ -361,10 +505,10 @@ export async function calculateQuotation(rawInput: CalculationInput) {
   }
 
   /*
-   * Sales representative response.
-   *
-   * Only customer-facing pricing is returned.
+   * Sales representatives receive
+   * customer-facing information only.
    */
+
   return {
     success: true as const,
 
@@ -372,6 +516,8 @@ export async function calculateQuotation(rawInput: CalculationInput) {
 
     items: results.map((item) => ({
       productId: item.productId,
+
+      productName: item.productName,
 
       quantityKg: item.quantityKg,
 
@@ -386,7 +532,7 @@ export async function calculateQuotation(rawInput: CalculationInput) {
 
 /*
  * ============================================================
- * CUSTOMER → PRODUCT LOOKUP
+ * CUSTOMER PRODUCTS
  * ============================================================
  */
 
@@ -428,4 +574,43 @@ export async function getCustomerProducts(customerId: string) {
   }
 
   return data ?? [];
+}
+
+/*
+ * ============================================================
+ * VEHICLE TYPES
+ * ============================================================
+ */
+
+export async function getVehicleTypes() {
+  await requireUser();
+
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from("vehicle_types")
+    .select(
+      `
+        id,
+        code,
+        name,
+        capacity_kg
+      `,
+    )
+    .eq("active", true)
+    .order("capacity_kg", {
+      ascending: true,
+      nullsFirst: false,
+    });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (
+    data?.map((vehicle) => ({
+      id: vehicle.id,
+      name: vehicle.name,
+    })) ?? []
+  );
 }

@@ -9,16 +9,63 @@ interface TransportRate {
   rate_aed: number;
 }
 
+interface Vehicle {
+  code: string;
+  capacity_kg: number | null;
+}
+
+interface Destination {
+  code: string;
+  region: string | null;
+}
+
 interface CostingOptions {
   product: CostingProduct;
   settings: CostingSettings;
+
   transport?: TransportRate | null;
+
+  vehicle?: Vehicle | null;
+
+  destination?: Destination | null;
 }
 
-function round(value: number, decimals = 2) {
+/*
+ * ============================================================
+ * HELPERS
+ * ============================================================
+ */
+
+function round(
+  value: number,
+  decimals = 2,
+) {
   const factor = 10 ** decimals;
-  return Math.round((value + Number.EPSILON) * factor) / factor;
+
+  return (
+    Math.round(
+      (value + Number.EPSILON) *
+        factor,
+    ) / factor
+  );
 }
+
+function assertFinite(
+  value: number,
+  name: string,
+) {
+  if (!Number.isFinite(value)) {
+    throw new Error(
+      `Invalid calculation value: ${name}.`,
+    );
+  }
+}
+
+/*
+ * ============================================================
+ * LC RATE
+ * ============================================================
+ */
 
 function getLcRate(
   creditDays: number,
@@ -43,10 +90,20 @@ function getLcRate(
   return settings.lc_sight_pct;
 }
 
+/*
+ * ============================================================
+ * SUPPLIER BANK CHARGE
+ * ============================================================
+ *
+ * IMPORTANT:
+ * This uses supplier MOP / supplier credit days.
+ * It must NOT use the customer's payment term.
+ */
+
 function getSupplierBankCharge(
-  paymentTerm: string,
+  paymentTerm: string | null,
   supplierInvoiceValue: number,
-  creditDays: number,
+  supplierCreditDays: number,
   settings: CostingSettings,
 ) {
   switch (paymentTerm) {
@@ -54,18 +111,30 @@ function getSupplierBankCharge(
       return settings.tt_bank_flat_fee;
 
     case "DA":
-      return supplierInvoiceValue * settings.da_bank_fee_pct;
+      return (
+        supplierInvoiceValue *
+        settings.da_bank_fee_pct
+      );
 
     case "LC":
       return (
         supplierInvoiceValue *
-        getLcRate(creditDays, settings)
+        getLcRate(
+          supplierCreditDays,
+          settings,
+        )
       );
 
     default:
       return 0;
   }
 }
+
+/*
+ * ============================================================
+ * CUSTOMER BANK CHARGE
+ * ============================================================
+ */
 
 function getCustomerBankCharge(
   paymentTerm: string,
@@ -74,49 +143,71 @@ function getCustomerBankCharge(
 ) {
   switch (paymentTerm) {
     case "DA":
-      return settings.customer_da_flat_fee;
+      return (
+        settings.customer_da_flat_fee
+      );
 
     case "LC":
       return (
         settings.customer_lc_flat_fee +
-        salesValue * settings.customer_lc_value_pct
+        salesValue *
+          settings.customer_lc_value_pct
       );
 
     case "BANK_AVALIZED_DRAFT":
-      return settings.customer_bank_draft_flat_fee;
+      return (
+        settings.customer_bank_draft_flat_fee
+      );
 
     default:
       return 0;
   }
 }
 
+/*
+ * ============================================================
+ * INSURANCE
+ * ============================================================
+ */
+
 function getInsuranceRate(
   incoterm: string,
   settings: CostingSettings,
 ) {
-  if (
-    incoterm === "CIF" ||
-    incoterm === "3RD_PORT"
-  ) {
-    return (
-      settings.marine_insurance_base_pct *
-      settings.marine_insurance_cif_multiplier
-    );
-  }
+  switch (incoterm) {
+    case "CIF":
+    case "3RD_PORT":
+      return (
+        settings.marine_insurance_base_pct *
+        settings.marine_insurance_cif_multiplier
+      );
 
-  if (incoterm === "FOB") {
-    return (
-      settings.marine_insurance_base_pct *
-      settings.marine_insurance_fob_multiplier
-    );
-  }
+    case "FOB":
+      return (
+        settings.marine_insurance_base_pct *
+        settings.marine_insurance_fob_multiplier
+      );
 
-  return 0;
+    default:
+      return 0;
+  }
 }
+
+/*
+ * ============================================================
+ * COURIER
+ * ============================================================
+ */
 
 function getCourierExpense(
   paymentTerm: string,
-  deliveryType: "local" | "export",
+  destinationRegion:
+    | string
+    | null
+    | undefined,
+  deliveryType:
+    | "local"
+    | "export",
   settings: CostingSettings,
 ) {
   if (paymentTerm !== "TT") {
@@ -127,8 +218,126 @@ function getCourierExpense(
     return settings.courier_local_aed;
   }
 
-  return 0;
+  switch (destinationRegion) {
+    case "gcc":
+      return settings.courier_gcc_aed;
+
+    case "africa":
+      return settings.courier_africa_aed;
+
+    default:
+      return 0;
+  }
 }
+
+/*
+ * ============================================================
+ * TRANSPORT
+ * ============================================================
+ */
+
+function getTransportCost(
+  quantityKg: number,
+  transportRate:
+    | TransportRate
+    | null
+    | undefined,
+  vehicle:
+    | Vehicle
+    | null
+    | undefined,
+  destinationCode:
+    | string
+    | null
+    | undefined,
+  settings: CostingSettings,
+) {
+  if (!transportRate) {
+    return {
+      transportCost: 0,
+      tripCount: 0,
+    };
+  }
+
+  if (!vehicle) {
+    throw new Error(
+      "Vehicle information is required for transport calculation.",
+    );
+  }
+
+  /*
+   * Trailer currently has no capacity in the DB.
+   *
+   * Until its real capacity is configured,
+   * treat the selected trailer as one shipment.
+   */
+
+  let tripCount = 1;
+
+  if (
+    vehicle.capacity_kg !== null
+  ) {
+    if (
+      vehicle.capacity_kg <= 0
+    ) {
+      throw new Error(
+        "Vehicle capacity must be greater than zero.",
+      );
+    }
+
+    tripCount = Math.ceil(
+      quantityKg /
+        vehicle.capacity_kg,
+    );
+  }
+
+  let transportCost =
+    transportRate.rate_aed *
+    tripCount;
+
+  /*
+   * DWC surcharge.
+   *
+   * The business settings contain separate
+   * under-7T and over-7T charges.
+   */
+
+  if (
+    destinationCode === "DWC"
+  ) {
+    const capacity =
+      vehicle.capacity_kg;
+
+    if (
+      capacity !== null &&
+      capacity < 7000
+    ) {
+      transportCost +=
+        settings.dwc_surcharge_under_7t *
+        tripCount;
+    }
+
+    if (
+      capacity !== null &&
+      capacity > 7000
+    ) {
+      transportCost +=
+        settings.dwc_surcharge_over_7t *
+        tripCount;
+    }
+  }
+
+  return {
+    transportCost,
+    tripCount,
+  };
+}
+
+/*
+ * ============================================================
+ * MAIN COSTING ENGINE
+ * ============================================================
+ */
 
 export function calculateCosting(
   input: CostingInput,
@@ -138,15 +347,32 @@ export function calculateCosting(
     product,
     settings,
     transport,
+    vehicle,
+    destination,
   } = options;
 
-  const quantity = input.quantityKg;
+  const quantity =
+    Number(input.quantityKg);
 
-  if (quantity <= 0) {
-    throw new Error("Quantity must be greater than zero.");
+  /*
+   * ----------------------------------------------------------
+   * VALIDATION
+   * ----------------------------------------------------------
+   */
+
+  if (
+    !Number.isFinite(quantity) ||
+    quantity <= 0
+  ) {
+    throw new Error(
+      "Quantity must be greater than zero.",
+    );
   }
 
   if (
+    !Number.isFinite(
+      input.targetProfitPct,
+    ) ||
     input.targetProfitPct < 0 ||
     input.targetProfitPct >= 100
   ) {
@@ -155,68 +381,110 @@ export function calculateCosting(
     );
   }
 
-  // ----------------------------------------
-  // SUPPLIER INVOICE / EX-WORKS
-  // ----------------------------------------
+  /*
+   * ----------------------------------------------------------
+   * SUPPLIER INVOICE
+   * ----------------------------------------------------------
+   */
 
   const supplierInvoiceValue =
-    product.cif_rate_usd *
-    settings.usd_to_aed_conversion *
+    Number(product.cif_rate_usd) *
+    Number(
+      settings.usd_to_aed_conversion,
+    ) *
     quantity;
 
-  const exWorksCost = supplierInvoiceValue;
+  const exWorksCost =
+    supplierInvoiceValue;
 
-  // ----------------------------------------
-  // INWARD COSTS
-  // ----------------------------------------
+  /*
+   * ----------------------------------------------------------
+   * INWARD COSTS
+   * ----------------------------------------------------------
+   */
 
   const inwardClearance =
-    product.inward_clearance_charge || 0;
+    Number(
+      product.inward_clearance_charge ??
+        0,
+    );
+
+  /*
+   * IMPORTANT:
+   * Supplier-side MOP comes from the product.
+   */
 
   const inwardBankCharge =
     getSupplierBankCharge(
-      input.paymentTerm,
+      product.supplier_mop,
       supplierInvoiceValue,
-      input.creditDays,
+      Number(
+        product.supplier_credit_days ??
+          0,
+      ),
       settings,
     );
 
   const storageCharge =
-    (product.storage_rate || 0) *
-    (product.storage_days || 0);
+    Number(
+      product.storage_rate ?? 0,
+    ) *
+    Number(
+      product.storage_days ?? 0,
+    );
 
-  // ----------------------------------------
-  // LOGISTICS
-  // ----------------------------------------
+  /*
+   * ----------------------------------------------------------
+   * TRANSPORT
+   * ----------------------------------------------------------
+   */
 
-  const outwardTransport =
-    transport?.rate_aed || 0;
+  const {
+    transportCost:
+      outwardTransport,
+  } = getTransportCost(
+    quantity,
+    transport,
+    vehicle,
+    destination?.code,
+    settings,
+  );
 
   const outwardClearance = 0;
+
   const freight = 0;
 
-  // ----------------------------------------
-  // CUSTOMS
-  // ----------------------------------------
+  /*
+   * ----------------------------------------------------------
+   * CUSTOMS
+   * ----------------------------------------------------------
+   */
 
   const customsDuty =
     supplierInvoiceValue *
-    settings.customs_duty_pct;
+    Number(
+      settings.customs_duty_pct,
+    );
 
-  // ----------------------------------------
-  // OTHER EXPENSES
-  // ----------------------------------------
+  /*
+   * ----------------------------------------------------------
+   * OTHER EXPENSES
+   * ----------------------------------------------------------
+   */
 
   const otherExpense =
     getCourierExpense(
       input.paymentTerm,
+      destination?.region,
       input.deliveryType,
       settings,
     );
 
-  // ----------------------------------------
-  // COSTS NOT DEPENDENT ON SALES VALUE
-  // ----------------------------------------
+  /*
+   * ----------------------------------------------------------
+   * FIXED COST
+   * ----------------------------------------------------------
+   */
 
   const fixedCost =
     exWorksCost +
@@ -229,33 +497,49 @@ export function calculateCosting(
     customsDuty +
     otherExpense;
 
-  // ----------------------------------------
-  // SALES-VALUE-DEPENDENT COSTS
-  //
-  // Insurance = insuranceRate × Sales
-  // LC finance = flatFee + lcValuePct × Sales
-  // Interest = fixedCost × annualRate × days/365
-  // ----------------------------------------
+  /*
+   * ----------------------------------------------------------
+   * CAPITAL INTEREST
+   * ----------------------------------------------------------
+   *
+   * This remains based on customer credit period because
+   * this represents the financing exposure created by the
+   * customer transaction.
+   */
 
   const capitalInterest =
     fixedCost *
     settings.annual_interest_rate *
     (input.creditDays / 365);
 
+  /*
+   * ----------------------------------------------------------
+   * CUSTOMER BANK FINANCE
+   * ----------------------------------------------------------
+   */
+
   const fixedFinanceCharge =
-    input.paymentTerm === "DA"
-      ? settings.customer_da_flat_fee
-      : input.paymentTerm === "LC"
-        ? settings.customer_lc_flat_fee
-        : input.paymentTerm ===
-            "BANK_AVALIZED_DRAFT"
-          ? settings.customer_bank_draft_flat_fee
-          : 0;
+    getCustomerBankCharge(
+      input.paymentTerm,
+      0,
+      settings,
+    );
+
+  /*
+   * getCustomerBankCharge(0) gives us only the fixed portion
+   * for LC/DA/draft.
+   */
 
   const salesDependentFinanceRate =
     input.paymentTerm === "LC"
       ? settings.customer_lc_value_pct
       : 0;
+
+  /*
+   * ----------------------------------------------------------
+   * INSURANCE
+   * ----------------------------------------------------------
+   */
 
   const insuranceRate =
     getInsuranceRate(
@@ -264,22 +548,19 @@ export function calculateCosting(
     );
 
   /*
-   * Sales Price formula:
+   * ----------------------------------------------------------
+   * SOLVE SELLING PRICE
+   * ----------------------------------------------------------
    *
-   * Sales = Total Cost / (1 - margin)
+   * Sales =
    *
-   * Total Cost =
-   *   fixedCost
-   *   + capitalInterest
-   *   + fixedFinanceCharge
-   *   + insuranceRate × Sales
-   *   + financeRate × Sales
-   *
-   * Therefore:
-   *
-   * Sales × (1 - margin - insuranceRate - financeRate)
-   *   =
-   * fixedCost + capitalInterest + fixedFinanceCharge
+   * Base Cost /
+   * (
+   *   1
+   *   - target margin
+   *   - insurance rate
+   *   - customer finance rate
+   * )
    */
 
   const baseAmount =
@@ -287,114 +568,210 @@ export function calculateCosting(
     capitalInterest +
     fixedFinanceCharge;
 
+  const targetMargin =
+    input.targetProfitPct / 100;
+
   const denominator =
     1 -
-    input.targetProfitPct / 100 -
+    targetMargin -
     insuranceRate -
     salesDependentFinanceRate;
 
-  if (denominator <= 0) {
+  if (
+    denominator <= 0
+  ) {
     throw new Error(
       "The selected margin and finance/insurance rates produce an invalid selling price.",
     );
   }
 
   const salesPrice =
-    baseAmount / denominator;
+    baseAmount /
+    denominator;
+
+  /*
+   * ----------------------------------------------------------
+   * SALES-DEPENDENT COSTS
+   * ----------------------------------------------------------
+   */
 
   const insurance =
-    salesPrice * insuranceRate;
+    salesPrice *
+    insuranceRate;
+
+  const variableFinanceCharge =
+    salesPrice *
+    salesDependentFinanceRate;
 
   const bankFinanceCharge =
     fixedFinanceCharge +
-    salesPrice *
-      salesDependentFinanceRate;
+    variableFinanceCharge;
+
+  /*
+   * ----------------------------------------------------------
+   * TOTAL COST
+   * ----------------------------------------------------------
+   */
 
   const totalCost =
     baseAmount +
     insurance +
-    salesPrice *
-      salesDependentFinanceRate;
+    variableFinanceCharge;
 
   const costPerUnit =
-    totalCost / quantity;
+    totalCost /
+    quantity;
 
   const salesUnitPrice =
-    salesPrice / quantity;
+    salesPrice /
+    quantity;
 
   const profitAmount =
-    salesPrice - totalCost;
+    salesPrice -
+    totalCost;
 
   const finalMarginPct =
     salesPrice === 0
       ? 0
-      : (profitAmount / salesPrice) * 100;
+      : (profitAmount /
+          salesPrice) *
+        100;
+
+  /*
+   * ----------------------------------------------------------
+   * SAFETY
+   * ----------------------------------------------------------
+   */
+
+  const values = {
+    supplierInvoiceValue,
+    exWorksCost,
+    inwardClearance,
+    inwardBankCharge,
+    storageCharge,
+    outwardClearance,
+    outwardTransport,
+    freight,
+    insurance,
+    otherExpense,
+    bankFinanceCharge,
+    capitalInterest,
+    customsDuty,
+    totalCost,
+    costPerUnit,
+    salesPrice,
+    salesUnitPrice,
+    profitAmount,
+    finalMarginPct,
+  };
+
+  for (
+    const [name, value] of Object.entries(
+      values,
+    )
+  ) {
+    assertFinite(
+      value,
+      name,
+    );
+  }
+
+  /*
+   * ----------------------------------------------------------
+   * RESULT
+   * ----------------------------------------------------------
+   */
 
   return {
-    quantityKg: round(quantity),
+    quantityKg:
+      round(quantity),
 
-    exWorksCost: round(exWorksCost),
-    supplierInvoiceValue: round(
-      supplierInvoiceValue,
-    ),
+    exWorksCost:
+      round(exWorksCost),
 
-    inwardClearance: round(
-      inwardClearance,
-    ),
+    supplierInvoiceValue:
+      round(
+        supplierInvoiceValue,
+      ),
 
-    inwardBankCharge: round(
-      inwardBankCharge,
-    ),
+    inwardClearance:
+      round(
+        inwardClearance,
+      ),
 
-    storageCharge: round(
-      storageCharge,
-    ),
+    inwardBankCharge:
+      round(
+        inwardBankCharge,
+      ),
 
-    outwardClearance: round(
-      outwardClearance,
-    ),
+    storageCharge:
+      round(
+        storageCharge,
+      ),
 
-    outwardTransport: round(
-      outwardTransport,
-    ),
+    outwardClearance:
+      round(
+        outwardClearance,
+      ),
 
-    freight: round(freight),
+    outwardTransport:
+      round(
+        outwardTransport,
+      ),
 
-    insurance: round(insurance),
+    freight:
+      round(freight),
 
-    otherExpense: round(otherExpense),
+    insurance:
+      round(insurance),
 
-    bankFinanceCharge: round(
-      bankFinanceCharge,
-    ),
+    otherExpense:
+      round(otherExpense),
 
-    capitalInterest: round(
-      capitalInterest,
-    ),
+    bankFinanceCharge:
+      round(
+        bankFinanceCharge,
+      ),
 
-    customsDuty: round(customsDuty),
+    capitalInterest:
+      round(
+        capitalInterest,
+      ),
 
-    totalCost: round(totalCost),
+    customsDuty:
+      round(
+        customsDuty,
+      ),
 
-    costPerUnit: round(
-      costPerUnit,
-      4,
-    ),
+    totalCost:
+      round(totalCost),
 
-    salesPrice: round(salesPrice),
+    costPerUnit:
+      round(
+        costPerUnit,
+        4,
+      ),
 
-    salesUnitPrice: round(
-      salesUnitPrice,
-      4,
-    ),
+    salesPrice:
+      round(
+        salesPrice,
+      ),
 
-    profitAmount: round(
-      profitAmount,
-    ),
+    salesUnitPrice:
+      round(
+        salesUnitPrice,
+        4,
+      ),
 
-    finalMarginPct: round(
-      finalMarginPct,
-      4,
-    ),
+    profitAmount:
+      round(
+        profitAmount,
+      ),
+
+    finalMarginPct:
+      round(
+        finalMarginPct,
+        4,
+      ),
   };
 }
