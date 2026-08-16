@@ -52,6 +52,8 @@ export interface CostingResult {
   purchaseCost: number;
   purchaseUnitCost: number;
   warehouseDays: number;
+  sellingTransport: number;
+  manualOtherCostAed: number;
 
   exWorksCost: number;
   supplierInvoiceValue: number;
