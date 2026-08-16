@@ -104,24 +104,16 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
   const purchaseUnitCost = purchaseCost / quantity;
   const warehouseDays = weightedDays / quantity;
 
-  const outwardClearanceRule = getRule(options.rules, "outward_clearance");
-  const outwardTransportRule = getRule(options.rules, "outward_transport");
-  const freightRule = getRule(options.rules, "freight");
-  const insuranceRule = getRule(options.rules, "insurance");
-  const otherExpenseRule = getRule(options.rules, "other_expense");
-  const customsDutyRule = getRule(options.rules, "customs_duty");
-
-  const outwardClearanceCalc = applyRule(outwardClearanceRule);
-  const transport = outwardTransportRule ? transportCost(quantity, options.transport, options.vehicle, options.destination, options.settings) : 0;
-  const outwardTransportCalc = { fixed: transport, variableRate: 0 };
-  const freightCalc = applyRule(freightRule, Number(input.freightAed ?? 0));
-  const insuranceCalc = applyRule(insuranceRule);
-  const otherExpenseCalc = applyRule(otherExpenseRule);
-  const customsDutyCalc = applyRule(customsDutyRule);
+  const outwardClearanceCalc = applyRule(getRule(options.rules, "outward_clearance"));
+  const outwardTransport = getRule(options.rules, "outward_transport") ? transportCost(quantity, options.transport, options.vehicle, options.destination, options.settings) : 0;
+  const freightCalc = applyRule(getRule(options.rules, "freight"), Number(input.freightAed ?? 0));
+  const insuranceCalc = applyRule(getRule(options.rules, "insurance"));
+  const otherExpenseCalc = applyRule(getRule(options.rules, "other_expense"));
+  const customsDutyCalc = applyRule(getRule(options.rules, "customs_duty"));
   const customerFinance = customerBankCharge(input.paymentTerm, options.settings);
 
   const capitalInterest = purchaseCost * options.settings.annual_interest_rate * (Number(input.creditDays) / 365);
-  const fixedSellingCost = purchaseOutwardClearance + purchaseOutwardTransport + purchaseFreight + purchaseInsurance + purchaseOtherExpense + purchaseFinance + outwardClearanceCalc.fixed + outwardTransportCalc.fixed + freightCalc.fixed + otherExpenseCalc.fixed + capitalInterest + customerFinance.fixed;
+  const fixedSellingCost = outwardClearanceCalc.fixed + outwardTransport + freightCalc.fixed + otherExpenseCalc.fixed + capitalInterest + customerFinance.fixed;
   const salesDependentRate = customerFinance.variableRate + insuranceCalc.variableRate + customsDutyCalc.variableRate + otherExpenseCalc.variableRate + outwardClearanceCalc.variableRate + freightCalc.variableRate;
   const denominator = 1 - input.targetProfitPct / 100 - salesDependentRate;
   if (denominator <= 0) throw new Error("The selected margin and configured selling charges produce an invalid selling price.");
@@ -131,43 +123,21 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
   const variableFinance = salesPrice * customerFinance.variableRate;
   const customsDuty = salesPrice * customsDutyCalc.variableRate;
   const otherExpense = purchaseOtherExpense + otherExpenseCalc.fixed + salesPrice * otherExpenseCalc.variableRate;
-  const outwardClearance = purchaseOutwardClearance + outwardClearanceCalc.fixed + salesPrice * outwardClearanceCalc.variableRate;
-  const outwardTransport = purchaseOutwardTransport + outwardTransportCalc.fixed;
+  const finalOutwardClearance = purchaseOutwardClearance + outwardClearanceCalc.fixed + salesPrice * outwardClearanceCalc.variableRate;
   const freight = purchaseFreight + freightCalc.fixed + salesPrice * freightCalc.variableRate;
+  const finalOutwardTransport = purchaseOutwardTransport + outwardTransport;
   const bankFinanceCharge = purchaseFinance + customerFinance.fixed + variableFinance;
-  const totalCost = purchaseCost + outwardClearance + outwardTransport + freight + insurance + otherExpense + customsDuty + capitalInterest + bankFinanceCharge;
+  const totalCost = purchaseCost + finalOutwardClearance + finalOutwardTransport + freight + insurance + otherExpense + customsDuty + capitalInterest + bankFinanceCharge;
   const costPerUnit = totalCost / quantity;
   const salesUnitPrice = salesPrice / quantity;
   const profitAmount = salesPrice - totalCost;
   const finalMarginPct = salesPrice === 0 ? 0 : (profitAmount / salesPrice) * 100;
 
-  const result = { quantityKg: quantity, sourcePurchaseCount, purchaseCost, purchaseUnitCost, warehouseDays, exWorksCost, supplierInvoiceValue: exWorksCost, inwardClearance, inwardBankCharge, storageCharge, outwardClearance, outwardTransport, freight, insurance, otherExpense, bankFinanceCharge, capitalInterest, customsDuty, totalCost, costPerUnit, salesPrice, salesUnitPrice, profitAmount, finalMarginPct };
+  const result = { quantityKg: quantity, sourcePurchaseCount, purchaseCost, purchaseUnitCost, warehouseDays, exWorksCost, supplierInvoiceValue: exWorksCost, inwardClearance, inwardBankCharge, storageCharge, outwardClearance: finalOutwardClearance, outwardTransport: finalOutwardTransport, freight, insurance, otherExpense, bankFinanceCharge, capitalInterest, customsDuty, totalCost, costPerUnit, salesPrice, salesUnitPrice, profitAmount, finalMarginPct };
   for (const [name, value] of Object.entries(result)) if (typeof value === "number") assertFinite(value, name);
 
   return {
     ...result,
-    quantityKg: round(quantity),
-    purchaseCost: round(purchaseCost),
-    purchaseUnitCost: round(purchaseUnitCost, 4),
-    warehouseDays: round(warehouseDays, 2),
-    exWorksCost: round(exWorksCost),
-    supplierInvoiceValue: round(exWorksCost),
-    inwardClearance: round(inwardClearance),
-    inwardBankCharge: round(inwardBankCharge),
-    storageCharge: round(storageCharge),
-    outwardClearance: round(outwardClearance),
-    outwardTransport: round(outwardTransport),
-    freight: round(freight),
-    insurance: round(insurance),
-    otherExpense: round(otherExpense),
-    bankFinanceCharge: round(bankFinanceCharge),
-    capitalInterest: round(capitalInterest),
-    customsDuty: round(customsDuty),
-    totalCost: round(totalCost),
-    costPerUnit: round(costPerUnit, 4),
-    salesPrice: round(salesPrice),
-    salesUnitPrice: round(salesUnitPrice, 4),
-    profitAmount: round(profitAmount),
-    finalMarginPct: round(finalMarginPct, 4),
+    quantityKg: round(quantity), purchaseCost: round(purchaseCost), purchaseUnitCost: round(purchaseUnitCost, 4), warehouseDays: round(warehouseDays, 2), exWorksCost: round(exWorksCost), supplierInvoiceValue: round(exWorksCost), inwardClearance: round(inwardClearance), inwardBankCharge: round(inwardBankCharge), storageCharge: round(storageCharge), outwardClearance: round(finalOutwardClearance), outwardTransport: round(finalOutwardTransport), freight: round(freight), insurance: round(insurance), otherExpense: round(otherExpense), bankFinanceCharge: round(bankFinanceCharge), capitalInterest: round(capitalInterest), customsDuty: round(customsDuty), totalCost: round(totalCost), costPerUnit: round(costPerUnit, 4), salesPrice: round(salesPrice), salesUnitPrice: round(salesUnitPrice, 4), profitAmount: round(profitAmount), finalMarginPct: round(finalMarginPct, 4),
   };
 }
