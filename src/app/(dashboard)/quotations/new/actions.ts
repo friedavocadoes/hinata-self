@@ -301,3 +301,21 @@ export async function calculateQuotation(rawInput: unknown) {
 
   return responseForRole(profile, calculation, { quotationId: quotation.id, quoteNumber: quotation.quote_number });
 }
+
+export async function getCustomerProducts(customerId: string) {
+  await requireUser();
+  const parsed = z.string().uuid().safeParse(customerId);
+  if (!parsed.success) throw new Error("Invalid customer.");
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("customer_products").select("id, product_id, product_name_original, payment_term, incoterm, place_of_delivery, product_match_status").eq("customer_id", customerId).order("product_name_original");
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function getVehicleTypes() {
+  await requireUser();
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("vehicle_types").select("id, code, name, capacity_kg").eq("active", true).order("capacity_kg", { ascending: true, nullsFirst: false });
+  if (error) throw new Error(error.message);
+  return data?.map((vehicle) => ({ id: vehicle.id, name: vehicle.name })) ?? [];
+}
