@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createInventoryAdjustment } from "./actions";
 
 export default async function InventoryPage() {
-  const { profile } = await requireUser();
+  await requireUser();
   const admin = createAdminClient();
   const [{ data: balances, error }, { data: products }, { data: warehouses }] = await Promise.all([
     admin.from("inventory_balances").select("product_id, product_name, quantity_kg").order("product_name"),
