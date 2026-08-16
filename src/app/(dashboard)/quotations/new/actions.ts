@@ -40,6 +40,8 @@ type InternalCalculation = {
     purchaseCost: number;
     purchaseUnitCost: number;
     warehouseDays: number;
+    sellingTransport: number;
+    manualOtherCostAed: number;
     exWorksCost: number;
     supplierInvoiceValue: number;
     inwardClearance: number;
@@ -257,7 +259,7 @@ async function persistQuotation(profileId: string, input: CalculationInput, calc
   return quotation;
 }
 
-function responseForRole(profile: { role?: string | null } | null | undefined, calculation: InternalCalculation, extra: Record<string, unknown> = {}) {
+function responseForRole<Extra extends Record<string, unknown> = Record<string, never>>(profile: { role?: string | null } | null | undefined, calculation: InternalCalculation, extra = {} as Extra) {
   if (profile?.role === "finance_admin") return {
     success: true as const,
     role: "finance_admin" as const,
@@ -278,7 +280,7 @@ function responseForRole(profile: { role?: string | null } | null | undefined, c
   };
 }
 
-export async function previewQuotation(rawInput: CalculationInput) {
+export async function previewQuotation(rawInput: unknown) {
   const { profile } = await requireUser();
   const parsed = calculateSchema.safeParse(rawInput);
   if (!parsed.success) return { success: false as const, error: "Invalid costing data." };
@@ -286,7 +288,7 @@ export async function previewQuotation(rawInput: CalculationInput) {
   return responseForRole(profile, calculation);
 }
 
-export async function calculateQuotation(rawInput: CalculationInput) {
+export async function calculateQuotation(rawInput: unknown) {
   const { profile } = await requireUser();
   const parsed = calculateSchema.safeParse(rawInput);
   if (!parsed.success) return { success: false as const, error: "Invalid costing data." };
@@ -298,22 +300,4 @@ export async function calculateQuotation(rawInput: CalculationInput) {
   revalidatePath("/dashboard");
 
   return responseForRole(profile, calculation, { quotationId: quotation.id, quoteNumber: quotation.quote_number });
-}
-
-export async function getCustomerProducts(customerId: string) {
-  await requireUser();
-  const parsed = z.string().uuid().safeParse(customerId);
-  if (!parsed.success) throw new Error("Invalid customer.");
-  const supabase = await createClient();
-  const { data, error } = await supabase.from("customer_products").select("id, product_id, product_name_original, payment_term, incoterm, place_of_delivery, product_match_status").eq("customer_id", customerId).order("product_name_original");
-  if (error) throw new Error(error.message);
-  return data ?? [];
-}
-
-export async function getVehicleTypes() {
-  await requireUser();
-  const supabase = await createClient();
-  const { data, error } = await supabase.from("vehicle_types").select("id, code, name, capacity_kg").eq("active", true).order("capacity_kg", { ascending: true, nullsFirst: false });
-  if (error) throw new Error(error.message);
-  return data?.map((vehicle) => ({ id: vehicle.id, name: vehicle.name })) ?? [];
 }
