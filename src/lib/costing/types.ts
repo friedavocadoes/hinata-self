@@ -9,6 +9,9 @@ export interface CostingInput {
   targetProfitPct: number;
   vehicleType?: string;
   freightAed?: number;
+  warehouseDaysOverride?: number;
+  transportCostOverrideAed?: number;
+  manualOtherCostAed?: number;
 }
 
 export interface PurchaseBatch {
