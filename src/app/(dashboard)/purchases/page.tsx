@@ -1,6 +1,7 @@
 import { requireUser } from "@/lib/auth/permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { receivePurchase } from "./actions";
+import { deletePurchaseOrder } from "./delete-actions";
 import { PurchaseForm } from "@/components/purchase/purchase-form";
 
 function money(value: number) {
@@ -66,7 +67,7 @@ export default async function PurchasesPage() {
                     <td className="px-5 py-4 text-right">{money(Number(p.total_value_aed))}</td>
                     <td className="px-5 py-4 text-right font-medium">{money(Number(p.total_cost))}</td>
                     <td className="px-5 py-4"><span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium capitalize ring-1 ring-inset ${statusClass(p.status)}`}>{p.status.replaceAll("_", " ")}</span></td>
-                    <td className="px-5 py-4 text-right">{p.status !== "received" && <form action={receivePurchase.bind(null, p.id)}><button className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50">Receive Stock</button></form>}</td>
+                    <td className="px-5 py-4 text-right"><div className="flex justify-end gap-2">{p.status !== "received" && p.status !== "partially_received" && <form action={receivePurchase.bind(null, p.id)}><button className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-medium text-emerald-700 hover:bg-emerald-50">Receive Stock</button></form>}{p.status !== "received" && p.status !== "partially_received" && <form action={deletePurchaseOrder.bind(null, p.id)}><button className="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50">Delete</button></form>}</div></td>
                   </tr>
                 ))}
               </tbody>
