@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth/permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -43,6 +44,9 @@ export async function createPurchaseOrder(formData: FormData) {
     qty_kg: input.qtyKg, unit_purchase_price_aed: input.unitPriceAed, total_purchase_value_aed: total,
   });
   if (itemError) { await admin.from("purchase_orders").delete().eq("id", purchase.id); throw new Error(itemError.message); }
+
+  revalidatePath("/purchases");
+  revalidatePath("/dashboard");
   return purchase.id;
 }
 
@@ -67,4 +71,7 @@ export async function receivePurchase(purchaseId: string) {
   }
 
   await admin.from("purchase_orders").update({ status: "received" }).eq("id", purchaseId);
+  revalidatePath("/purchases");
+  revalidatePath("/inventory");
+  revalidatePath("/dashboard");
 }
