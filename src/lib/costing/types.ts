@@ -23,6 +23,14 @@ export interface PurchaseBatch {
   purchaseOrderExWorksCost: number;
   purchaseSharedCost: number;
   storageRateAedPerCbmDay: number;
+  inwardClearanceCharge: number;
+  inwardBankCharge: number;
+  outwardClearanceCharge: number;
+  outwardTransportCharge: number;
+  freightCharge: number;
+  insuranceCharge: number;
+  otherExpenseCharge: number;
+  financeCharge: number;
 }
 
 export interface IncotermCostRule {
