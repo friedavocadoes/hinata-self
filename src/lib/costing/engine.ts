@@ -35,10 +35,10 @@ function applyRule(rule: IncotermCostRule | undefined, manualValue = 0) {
   return { fixed: 0, variableRate: Number(rule.rate_pct) * Number(rule.multiplier ?? 1) };
 }
 
-function allocateBatch(batch: PurchaseBatch, take: number) {
+function allocateBatch(batch: PurchaseBatch, take: number, warehouseDaysOverride?: number) {
   const ratio = batch.purchaseOrderExWorksCost > 0 ? (batch.unitExWorksCostAed * batch.quantityOriginalKg) / batch.purchaseOrderExWorksCost : 0;
   const sharedPerKg = batch.quantityOriginalKg > 0 ? (batch.purchaseSharedCost * ratio) / batch.quantityOriginalKg : 0;
-  const days = daysBetween(batch.receivedAt);
+  const days = warehouseDaysOverride !== undefined ? Math.max(0, warehouseDaysOverride) : daysBetween(batch.receivedAt);
   const storagePerKg = batch.quantityOriginalKg > 0 ? (batch.volumeCbm / batch.quantityOriginalKg) * batch.storageRateAedPerCbmDay * days : 0;
   const scale = batch.quantityOriginalKg > 0 ? take / batch.quantityOriginalKg : 0;
   return {
@@ -61,6 +61,9 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
   const quantity = Number(input.quantityKg);
   if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be greater than zero.");
   if (!Number.isFinite(input.targetProfitPct) || input.targetProfitPct < 0 || input.targetProfitPct >= 100) throw new Error("Target profit percentage must be between 0 and 99.99.");
+  if (input.warehouseDaysOverride !== undefined && (!Number.isFinite(input.warehouseDaysOverride) || input.warehouseDaysOverride < 0)) throw new Error("Warehouse days must be zero or greater.");
+  if (input.transportCostOverrideAed !== undefined && (!Number.isFinite(input.transportCostOverrideAed) || input.transportCostOverrideAed < 0)) throw new Error("Transport cost must be zero or greater.");
+  if (input.manualOtherCostAed !== undefined && (!Number.isFinite(input.manualOtherCostAed) || input.manualOtherCostAed < 0)) throw new Error("Other cost must be zero or greater.");
 
   const batches = [...options.batches].filter((b) => Number(b.quantityAvailableKg) > 0).sort((a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime());
   const available = batches.reduce((sum, b) => sum + Number(b.quantityAvailableKg), 0);
@@ -85,7 +88,7 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
     if (remaining <= 0) break;
     const take = Math.min(remaining, Number(batch.quantityAvailableKg));
     if (take <= 0) continue;
-    const allocation = allocateBatch(batch, take);
+    const allocation = allocateBatch(batch, take, input.warehouseDaysOverride);
     remaining -= take;
     sourcePurchaseCount += 1;
     purchaseCost += allocation.unitCost * take;
@@ -105,15 +108,17 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
   const purchaseUnitCost = purchaseCost / quantity;
   const warehouseDays = weightedDays / quantity;
   const outwardClearanceCalc = applyRule(getRule(options.rules, "outward_clearance"));
-  const sellingTransport = getRule(options.rules, "outward_transport") ? transportCost(quantity, options.transport, options.vehicle, options.destination, options.settings) : 0;
+  const calculatedTransport = input.incoterm === "EXW" ? 0 : transportCost(quantity, options.transport, options.vehicle, options.destination, options.settings);
+  const sellingTransport = input.incoterm === "EXW" ? 0 : (input.transportCostOverrideAed ?? calculatedTransport);
   const freightCalc = applyRule(getRule(options.rules, "freight"), Number(input.freightAed ?? 0));
   const insuranceCalc = applyRule(getRule(options.rules, "insurance"));
   const otherExpenseCalc = applyRule(getRule(options.rules, "other_expense"));
   const customsDutyCalc = applyRule(getRule(options.rules, "customs_duty"));
   const customerFinance = customerBankCharge(input.paymentTerm, options.settings);
+  const manualOtherCost = Number(input.manualOtherCostAed ?? 0);
 
   const capitalInterest = purchaseCost * options.settings.annual_interest_rate * (Number(input.creditDays) / 365);
-  const fixedSellingCost = outwardClearanceCalc.fixed + sellingTransport + freightCalc.fixed + otherExpenseCalc.fixed + capitalInterest + customerFinance.fixed;
+  const fixedSellingCost = outwardClearanceCalc.fixed + sellingTransport + freightCalc.fixed + otherExpenseCalc.fixed + manualOtherCost + capitalInterest + customerFinance.fixed;
   const salesDependentRate = customerFinance.variableRate + insuranceCalc.variableRate + customsDutyCalc.variableRate + otherExpenseCalc.variableRate + outwardClearanceCalc.variableRate + freightCalc.variableRate;
   const denominator = 1 - input.targetProfitPct / 100 - salesDependentRate;
   if (denominator <= 0) throw new Error("The selected margin and configured selling charges produce an invalid selling price.");
@@ -122,7 +127,7 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
   const sellingInsurance = salesPrice * insuranceCalc.variableRate;
   const variableFinance = salesPrice * customerFinance.variableRate;
   const sellingCustomsDuty = salesPrice * customsDutyCalc.variableRate;
-  const sellingOtherExpense = otherExpenseCalc.fixed + salesPrice * otherExpenseCalc.variableRate;
+  const sellingOtherExpense = otherExpenseCalc.fixed + salesPrice * otherExpenseCalc.variableRate + manualOtherCost;
   const sellingOutwardClearance = outwardClearanceCalc.fixed + salesPrice * outwardClearanceCalc.variableRate;
   const sellingFreight = freightCalc.fixed + salesPrice * freightCalc.variableRate;
   const sellingBankFinance = customerFinance.fixed + variableFinance;
