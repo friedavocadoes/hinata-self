@@ -127,12 +127,12 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
   const sellingInsurance = salesPrice * insuranceCalc.variableRate;
   const variableFinance = salesPrice * customerFinance.variableRate;
   const sellingCustomsDuty = salesPrice * customsDutyCalc.variableRate;
-  const sellingOtherExpense = otherExpenseCalc.fixed + salesPrice * otherExpenseCalc.variableRate + manualOtherCost;
+  const sellingOtherExpense = otherExpenseCalc.fixed + salesPrice * otherExpenseCalc.variableRate;
   const sellingOutwardClearance = outwardClearanceCalc.fixed + salesPrice * outwardClearanceCalc.variableRate;
   const sellingFreight = freightCalc.fixed + salesPrice * freightCalc.variableRate;
   const sellingBankFinance = customerFinance.fixed + variableFinance;
 
-  const totalCost = purchaseCost + sellingOutwardClearance + sellingTransport + sellingFreight + sellingInsurance + sellingOtherExpense + sellingCustomsDuty + capitalInterest + sellingBankFinance;
+  const totalCost = purchaseCost + sellingOutwardClearance + sellingTransport + sellingFreight + sellingInsurance + sellingOtherExpense + sellingCustomsDuty + capitalInterest + sellingBankFinance + manualOtherCost;
   const costPerUnit = totalCost / quantity;
   const salesUnitPrice = salesPrice / quantity;
   const profitAmount = salesPrice - totalCost;
@@ -153,7 +153,7 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
     outwardTransport: purchaseOutwardTransport + sellingTransport,
     freight: purchaseFreight + sellingFreight,
     insurance: purchaseInsurance + sellingInsurance,
-    otherExpense: purchaseOtherExpense + sellingOtherExpense,
+    otherExpense: purchaseOtherExpense + sellingOtherExpense + manualOtherCost,
     bankFinanceCharge: purchaseFinance + sellingBankFinance,
     capitalInterest,
     customsDuty: sellingCustomsDuty,
