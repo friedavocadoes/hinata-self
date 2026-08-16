@@ -144,6 +144,8 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
     purchaseCost,
     purchaseUnitCost,
     warehouseDays,
+    sellingTransport,
+    manualOtherCostAed: manualOtherCost,
     exWorksCost,
     supplierInvoiceValue: exWorksCost,
     inwardClearance,
@@ -169,6 +171,6 @@ export function calculateCosting(input: CostingInput, options: CostingOptions): 
 
   return {
     ...result,
-    quantityKg: round(quantity), purchaseCost: round(purchaseCost), purchaseUnitCost: round(purchaseUnitCost, 4), warehouseDays: round(warehouseDays, 2), exWorksCost: round(exWorksCost), supplierInvoiceValue: round(exWorksCost), inwardClearance: round(inwardClearance), inwardBankCharge: round(inwardBankCharge), storageCharge: round(storageCharge), outwardClearance: round(result.outwardClearance), outwardTransport: round(result.outwardTransport), freight: round(result.freight), insurance: round(result.insurance), otherExpense: round(result.otherExpense), bankFinanceCharge: round(result.bankFinanceCharge), capitalInterest: round(capitalInterest), customsDuty: round(sellingCustomsDuty), totalCost: round(totalCost), costPerUnit: round(costPerUnit, 4), salesPrice: round(salesPrice), salesUnitPrice: round(salesUnitPrice, 4), profitAmount: round(profitAmount), finalMarginPct: round(finalMarginPct, 4),
+    quantityKg: round(quantity), purchaseCost: round(purchaseCost), purchaseUnitCost: round(purchaseUnitCost, 4), warehouseDays: round(warehouseDays, 2), sellingTransport: round(sellingTransport), manualOtherCostAed: round(manualOtherCost), exWorksCost: round(exWorksCost), supplierInvoiceValue: round(exWorksCost), inwardClearance: round(inwardClearance), inwardBankCharge: round(inwardBankCharge), storageCharge: round(storageCharge), outwardClearance: round(result.outwardClearance), outwardTransport: round(result.outwardTransport), freight: round(result.freight), insurance: round(result.insurance), otherExpense: round(result.otherExpense), bankFinanceCharge: round(result.bankFinanceCharge), capitalInterest: round(capitalInterest), customsDuty: round(sellingCustomsDuty), totalCost: round(totalCost), costPerUnit: round(costPerUnit, 4), salesPrice: round(salesPrice), salesUnitPrice: round(salesUnitPrice, 4), profitAmount: round(profitAmount), finalMarginPct: round(finalMarginPct),
   };
 }
