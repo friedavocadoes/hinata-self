@@ -1,0 +1,22 @@
+import { requireUser } from "@/lib/auth/permissions";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { createTransportRate, toggleTransportRate, updateTransportRate } from "./actions";
+
+export default async function TransportAdminPage() {
+  const { profile } = await requireUser();
+  if (profile?.role !== "finance_admin") throw new Error("Forbidden");
+  const admin = createAdminClient();
+  const [{ data: rates, error: ratesError }, { data: destinations, error: destinationsError }, { data: vehicles, error: vehiclesError }] = await Promise.all([
+    admin.from("transport_rates").select("id, destination_id, vehicle_type_id, rate_aed, effective_from, active, destinations(name), vehicle_types(name)").order("created_at", { ascending: false }),
+    admin.from("destinations").select("id, name, code").eq("active", true).order("name"),
+    admin.from("vehicle_types").select("id, name, code, capacity_kg").eq("active", true).order("capacity_kg", { ascending: true, nullsFirst: false }),
+  ]);
+  if (ratesError) throw new Error(ratesError.message);
+  if (destinationsError) throw new Error(destinationsError.message);
+  if (vehiclesError) throw new Error(vehiclesError.message);
+  const input = "rounded-lg border px-2.5 py-2 text-sm";
+  return <div className="p-8"><div className="mb-8"><h1 className="text-2xl font-semibold">Transport</h1><p className="mt-1 text-sm text-zinc-500">Maintain destination and vehicle transport rates used by live costing.</p></div>
+    <section className="mb-8 rounded-xl border bg-white p-6 shadow-sm"><h2 className="mb-4 font-semibold">Add Transport Rate</h2><form action={createTransportRate} className="grid gap-3 md:grid-cols-4"><select name="destinationId" required className={input}><option value="">Destination</option>{(destinations ?? []).map((d) => <option key={d.id} value={d.id}>{d.name} ({d.code})</option>)}</select><select name="vehicleTypeId" required className={input}><option value="">Vehicle</option>{(vehicles ?? []).map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}</select><input name="rateAed" required type="number" min="0" step="0.01" placeholder="Rate AED" className={input}/><input name="effectiveFrom" type="date" className={input}/><button className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white">Add Rate</button></form></section>
+    <section className="overflow-x-auto rounded-xl border bg-white shadow-sm"><table className="w-full min-w-[1000px] text-sm"><thead className="border-b bg-zinc-50"><tr><th className="px-4 py-3 text-left">Destination</th><th className="px-4 py-3 text-left">Vehicle</th><th className="px-4 py-3 text-right">Rate AED</th><th className="px-4 py-3 text-left">Effective From</th><th className="px-4 py-3">Active</th><th className="px-4 py-3"/></tr></thead><tbody className="divide-y">{(rates ?? []).map((rate) => { const destination = Array.isArray(rate.destinations) ? rate.destinations[0] : rate.destinations; const vehicle = Array.isArray(rate.vehicle_types) ? rate.vehicle_types[0] : rate.vehicle_types; return <tr key={rate.id}><td colSpan={6}><form action={updateTransportRate} className="grid grid-cols-[1.3fr_1.3fr_1fr_1fr_.6fr_.7fr] items-center gap-3 px-4 py-3"><input type="hidden" name="id" value={rate.id}/><select name="destinationId" defaultValue={rate.destination_id} className={input}>{(destinations ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select><select name="vehicleTypeId" defaultValue={rate.vehicle_type_id} className={input}>{(vehicles ?? []).map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}</select><input name="rateAed" type="number" min="0" step="0.01" defaultValue={Number(rate.rate_aed)} className={input}/><input name="effectiveFrom" type="date" defaultValue={rate.effective_from ?? ""} className={input}/><span className="text-center text-xs">{rate.active ? "Yes" : "No"}</span><button className="rounded-lg bg-zinc-900 px-3 py-2 text-xs font-medium text-white">Save</button></form><div className="px-4 pb-2 text-xs text-zinc-400">{destination?.name ?? "Destination"} · {vehicle?.name ?? "Vehicle"}<form action={toggleTransportRate} className="inline ml-3"><input type="hidden" name="id" value={rate.id}/><input type="hidden" name="active" value={String(rate.active)}/><button className="text-zinc-500 hover:text-zinc-900">{rate.active ? "Deactivate" : "Activate"}</button></form></div></td></tr>; })}</tbody></table></section>
+  </div>;
+}
