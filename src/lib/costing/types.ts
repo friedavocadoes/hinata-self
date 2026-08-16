@@ -3,9 +3,7 @@ export interface CostingInput {
 
   quantityKg: number;
 
-  deliveryType:
-    | "local"
-    | "export";
+  deliveryType: "local" | "export";
 
   destinationId: string;
 
@@ -18,6 +16,8 @@ export interface CostingInput {
   targetProfitPct: number;
 
   vehicleType?: string;
+
+  finalMarginPct?: number;
 }
 
 export interface CostingResult {
@@ -70,9 +70,7 @@ export interface CostingProduct {
 
   supplier_id?: string | null;
 
-  supplier_mop:
-    | string
-    | null;
+  supplier_mop: string | null;
 
   supplier_credit_days: number;
 }
