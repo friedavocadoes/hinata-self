@@ -1,653 +1,203 @@
-import {
-  CostingInput,
-  CostingProduct,
-  CostingResult,
-  CostingSettings,
-} from "./types";
+import { CostingInput, CostingResult, CostingSettings, IncotermCostRule, PurchaseBatch } from "./types";
 
-interface TransportRate {
-  rate_aed: number;
-}
-
-interface Vehicle {
-  code: string;
-  capacity_kg: number | null;
-}
-
-interface Destination {
-  code: string;
-  region: string | null;
-}
+interface TransportRate { rate_aed: number }
+interface Vehicle { code: string; capacity_kg: number | null }
+interface Destination { code: string; region: string | null }
 
 interface CostingOptions {
-  product: CostingProduct;
+  batches: PurchaseBatch[];
+  rules: IncotermCostRule[];
   settings: CostingSettings;
-
   transport?: TransportRate | null;
-
   vehicle?: Vehicle | null;
-
   destination?: Destination | null;
 }
 
-/*
- * ============================================================
- * HELPERS
- * ============================================================
- */
-
-function round(
-  value: number,
-  decimals = 2,
-) {
+function round(value: number, decimals = 2) {
   const factor = 10 ** decimals;
-
-  return (
-    Math.round(
-      (value + Number.EPSILON) *
-        factor,
-    ) / factor
-  );
+  return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
-function assertFinite(
-  value: number,
-  name: string,
-) {
-  if (!Number.isFinite(value)) {
-    throw new Error(
-      `Invalid calculation value: ${name}.`,
-    );
-  }
+function assertFinite(value: number, name: string) {
+  if (!Number.isFinite(value)) throw new Error(`Invalid calculation value: ${name}.`);
 }
 
-/*
- * ============================================================
- * LC RATE
- * ============================================================
- */
-
-function getLcRate(
-  creditDays: number,
-  settings: CostingSettings,
-) {
-  if (creditDays >= 120) {
-    return settings.lc_120_pct;
-  }
-
-  if (creditDays >= 90) {
-    return settings.lc_90_pct;
-  }
-
-  if (creditDays >= 60) {
-    return settings.lc_60_pct;
-  }
-
-  if (creditDays >= 30) {
-    return settings.lc_30_pct;
-  }
-
-  return settings.lc_sight_pct;
+function getRule(rules: IncotermCostRule[], code: string) {
+  return rules.find((rule) => rule.cost_code === code && rule.enabled && rule.calculation_type !== "disabled");
 }
 
-/*
- * ============================================================
- * SUPPLIER BANK CHARGE
- * ============================================================
- *
- * IMPORTANT:
- * This uses supplier MOP / supplier credit days.
- * It must NOT use the customer's payment term.
- */
-
-function getSupplierBankCharge(
-  paymentTerm: string | null,
-  supplierInvoiceValue: number,
-  supplierCreditDays: number,
-  settings: CostingSettings,
-) {
-  switch (paymentTerm) {
-    case "TT":
-      return settings.tt_bank_flat_fee;
-
-    case "DA":
-      return (
-        supplierInvoiceValue *
-        settings.da_bank_fee_pct
-      );
-
-    case "LC":
-      return (
-        supplierInvoiceValue *
-        getLcRate(
-          supplierCreditDays,
-          settings,
-        )
-      );
-
-    default:
-      return 0;
-  }
+function daysBetween(start: string) {
+  const startDate = new Date(start);
+  if (Number.isNaN(startDate.getTime())) throw new Error("Invalid purchase receipt date.");
+  return Math.max(0, Math.floor((Date.now() - startDate.getTime()) / 86400000));
 }
 
-/*
- * ============================================================
- * CUSTOMER BANK CHARGE
- * ============================================================
- */
-
-function getCustomerBankCharge(
-  paymentTerm: string,
-  salesValue: number,
-  settings: CostingSettings,
-) {
-  switch (paymentTerm) {
-    case "DA":
-      return (
-        settings.customer_da_flat_fee
-      );
-
-    case "LC":
-      return (
-        settings.customer_lc_flat_fee +
-        salesValue *
-          settings.customer_lc_value_pct
-      );
-
-    case "BANK_AVALIZED_DRAFT":
-      return (
-        settings.customer_bank_draft_flat_fee
-      );
-
-    default:
-      return 0;
+function transportCost(quantityKg: number, transport: TransportRate | null | undefined, vehicle: Vehicle | null | undefined, destination: Destination | null | undefined, settings: CostingSettings) {
+  if (!transport || !vehicle) return 0;
+  const tripCount = vehicle.capacity_kg && vehicle.capacity_kg > 0 ? Math.ceil(quantityKg / vehicle.capacity_kg) : 1;
+  let total = Number(transport.rate_aed) * tripCount;
+  if (destination?.code === "DWC") {
+    if (vehicle.capacity_kg !== null && vehicle.capacity_kg < 7000) total += settings.dwc_surcharge_under_7t * tripCount;
+    if (vehicle.capacity_kg !== null && vehicle.capacity_kg > 7000) total += settings.dwc_surcharge_over_7t * tripCount;
   }
+  return total;
 }
 
-/*
- * ============================================================
- * INSURANCE
- * ============================================================
- */
-
-function getInsuranceRate(
-  incoterm: string,
-  settings: CostingSettings,
-) {
-  switch (incoterm) {
-    case "CIF":
-    case "3RD_PORT":
-      return (
-        settings.marine_insurance_base_pct *
-        settings.marine_insurance_cif_multiplier
-      );
-
-    case "FOB":
-      return (
-        settings.marine_insurance_base_pct *
-        settings.marine_insurance_fob_multiplier
-      );
-
-    default:
-      return 0;
-  }
+function customerBankCharge(paymentTerm: string, settings: CostingSettings) {
+  if (paymentTerm === "DA") return { fixed: settings.customer_da_flat_fee, variableRate: 0 };
+  if (paymentTerm === "LC") return { fixed: settings.customer_lc_flat_fee, variableRate: settings.customer_lc_value_pct };
+  if (paymentTerm === "BANK_AVALIZED_DRAFT") return { fixed: settings.customer_bank_draft_flat_fee, variableRate: 0 };
+  return { fixed: 0, variableRate: 0 };
 }
 
-/*
- * ============================================================
- * COURIER
- * ============================================================
- */
-
-function getCourierExpense(
-  paymentTerm: string,
-  destinationRegion:
-    | string
-    | null
-    | undefined,
-  deliveryType:
-    | "local"
-    | "export",
-  settings: CostingSettings,
-) {
-  if (paymentTerm !== "TT") {
-    return 0;
-  }
-
-  if (deliveryType === "local") {
-    return settings.courier_local_aed;
-  }
-
-  switch (destinationRegion) {
-    case "gcc":
-      return settings.courier_gcc_aed;
-
-    case "africa":
-      return settings.courier_africa_aed;
-
-    default:
-      return 0;
-  }
+function applyRule(rule: IncotermCostRule | undefined, base: number, manualValue = 0) {
+  if (!rule || !rule.enabled || rule.calculation_type === "disabled") return { fixed: 0, variableRate: 0, value: 0 };
+  if (rule.calculation_type === "manual") return { fixed: manualValue, variableRate: 0, value: manualValue };
+  if (rule.calculation_type === "fixed") return { fixed: Number(rule.amount_aed), variableRate: 0, value: Number(rule.amount_aed) };
+  const rate = Number(rule.rate_pct) * Number(rule.multiplier ?? 1);
+  return { fixed: 0, variableRate: rate, value: base * rate };
 }
 
-/*
- * ============================================================
- * TRANSPORT
- * ============================================================
- */
-
-function getTransportCost(
-  quantityKg: number,
-  transportRate:
-    | TransportRate
-    | null
-    | undefined,
-  vehicle:
-    | Vehicle
-    | null
-    | undefined,
-  destinationCode:
-    | string
-    | null
-    | undefined,
-  settings: CostingSettings,
-) {
-  if (!transportRate) {
-    return {
-      transportCost: 0,
-      tripCount: 0,
-    };
-  }
-
-  if (!vehicle) {
-    throw new Error(
-      "Vehicle information is required for transport calculation.",
-    );
-  }
-
-  /*
-   * Trailer currently has no capacity in the DB.
-   *
-   * Until its real capacity is configured,
-   * treat the selected trailer as one shipment.
-   */
-
-  let tripCount = 1;
-
-  if (
-    vehicle.capacity_kg !== null
-  ) {
-    if (
-      vehicle.capacity_kg <= 0
-    ) {
-      throw new Error(
-        "Vehicle capacity must be greater than zero.",
-      );
-    }
-
-    tripCount = Math.ceil(
-      quantityKg /
-        vehicle.capacity_kg,
-    );
-  }
-
-  let transportCost =
-    transportRate.rate_aed *
-    tripCount;
-
-  /*
-   * DWC surcharge.
-   *
-   * The business settings contain separate
-   * under-7T and over-7T charges.
-   */
-
-  if (
-    destinationCode === "DWC"
-  ) {
-    const capacity =
-      vehicle.capacity_kg;
-
-    if (
-      capacity !== null &&
-      capacity < 7000
-    ) {
-      transportCost +=
-        settings.dwc_surcharge_under_7t *
-        tripCount;
-    }
-
-    if (
-      capacity !== null &&
-      capacity > 7000
-    ) {
-      transportCost +=
-        settings.dwc_surcharge_over_7t *
-        tripCount;
-    }
-  }
-
+function allocatePurchaseBatch(batch: PurchaseBatch, quantityKg: number) {
+  const take = Math.min(quantityKg, batch.quantityAvailableKg);
+  const allocationRatio = batch.purchaseOrderExWorksCost > 0
+    ? (batch.unitExWorksCostAed * batch.quantityOriginalKg) / batch.purchaseOrderExWorksCost
+    : batch.quantityOriginalKg > 0 ? 1 : 0;
+  const allocatedSharedTotal = batch.purchaseSharedCost * allocationRatio;
+  const sharedPerKg = batch.quantityOriginalKg > 0 ? allocatedSharedTotal / batch.quantityOriginalKg : 0;
+  const days = daysBetween(batch.receivedAt);
+  const storagePerKg = batch.quantityOriginalKg > 0
+    ? (batch.volumeCbm / batch.quantityOriginalKg) * batch.storageRateAedPerCbmDay * days
+    : 0;
+  const unitCost = batch.unitExWorksCostAed + sharedPerKg + storagePerKg;
   return {
-    transportCost,
-    tripCount,
+    take,
+    days,
+    unitCost,
+    exWorks: batch.unitExWorksCostAed * take,
+    shared: sharedPerKg * take,
+    storage: storagePerKg * take,
   };
 }
 
-/*
- * ============================================================
- * MAIN COSTING ENGINE
- * ============================================================
- */
+export function calculateCosting(input: CostingInput, options: CostingOptions): CostingResult {
+  const quantity = Number(input.quantityKg);
+  if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Quantity must be greater than zero.");
+  if (!Number.isFinite(input.targetProfitPct) || input.targetProfitPct < 0 || input.targetProfitPct >= 100) throw new Error("Target profit percentage must be between 0 and 99.99.");
 
-export function calculateCosting(
-  input: CostingInput,
-  options: CostingOptions,
-): CostingResult {
-  const {
-    product,
-    settings,
-    transport,
-    vehicle,
-    destination,
-  } = options;
+  const batches = [...options.batches]
+    .filter((batch) => Number(batch.quantityAvailableKg) > 0)
+    .sort((a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime());
 
-  const quantity =
-    Number(input.quantityKg);
+  const totalAvailable = batches.reduce((sum, batch) => sum + Number(batch.quantityAvailableKg), 0);
+  if (totalAvailable < quantity) throw new Error(`Only ${round(totalAvailable, 2)} kg of received stock is available for this product.`);
 
-  /*
-   * ----------------------------------------------------------
-   * VALIDATION
-   * ----------------------------------------------------------
-   */
+  let remaining = quantity;
+  let purchaseCost = 0;
+  let exWorksCost = 0;
+  let sharedCost = 0;
+  let storageCharge = 0;
+  let weightedDays = 0;
+  let sourcePurchaseCount = 0;
+  let purchaseUnitCost = 0;
 
-  if (
-    !Number.isFinite(quantity) ||
-    quantity <= 0
-  ) {
-    throw new Error(
-      "Quantity must be greater than zero.",
-    );
+  for (const batch of batches) {
+    if (remaining <= 0) break;
+    const allocation = allocatePurchaseBatch(batch, remaining);
+    if (allocation.take <= 0) continue;
+    sourcePurchaseCount += 1;
+    remaining -= allocation.take;
+    purchaseCost += allocation.unitCost * allocation.take;
+    purchaseUnitCost += allocation.unitCost * allocation.take;
+    exWorksCost += allocation.exWorks;
+    sharedCost += allocation.shared;
+    storageCharge += allocation.storage;
+    weightedDays += allocation.days * allocation.take;
   }
 
-  if (
-    !Number.isFinite(
-      input.targetProfitPct,
-    ) ||
-    input.targetProfitPct < 0 ||
-    input.targetProfitPct >= 100
-  ) {
-    throw new Error(
-      "Target profit percentage must be between 0 and 99.99.",
-    );
-  }
+  purchaseUnitCost /= quantity;
+  const warehouseDays = weightedDays / quantity;
 
-  /*
-   * ----------------------------------------------------------
-   * SUPPLIER INVOICE
-   * ----------------------------------------------------------
-   */
+  const inwardClearance = sharedCost > 0 ? 0 : 0;
+  const purchaseRules = options.rules;
+  const outwardClearanceRule = getRule(purchaseRules, "outward_clearance");
+  const outwardTransportRule = getRule(purchaseRules, "outward_transport");
+  const freightRule = getRule(purchaseRules, "freight");
+  const insuranceRule = getRule(purchaseRules, "insurance");
+  const otherExpenseRule = getRule(purchaseRules, "other_expense");
+  const customsDutyRule = getRule(purchaseRules, "customs_duty");
 
-  const supplierInvoiceValue =
-    Number(product.cif_rate_usd) *
-    Number(
-      settings.usd_to_aed_conversion,
-    ) *
-    quantity;
+  const outwardClearanceCalc = applyRule(outwardClearanceRule, purchaseCost);
+  const outwardTransportCalc = outwardTransportRule
+    ? { fixed: transportCost(quantity, options.transport, options.vehicle, options.destination, options.settings), variableRate: 0, value: transportCost(quantity, options.transport, options.vehicle, options.destination, options.settings) }
+    : { fixed: 0, variableRate: 0, value: 0 };
+  const freightCalc = applyRule(freightRule, purchaseCost, Number(input.freightAed ?? 0));
+  const otherExpenseCalc = applyRule(otherExpenseRule, purchaseCost);
+  const customsDutyCalc = applyRule(customsDutyRule, purchaseCost);
 
-  const exWorksCost =
-    supplierInvoiceValue;
+  const customerFinance = customerBankCharge(input.paymentTerm, options.settings);
+  const insuranceCalc = applyRule(insuranceRule, 0);
+  const fixedFinanceCharge = customerFinance.fixed;
 
-  /*
-   * ----------------------------------------------------------
-   * INWARD COSTS
-   * ----------------------------------------------------------
-   */
-
-  const inwardClearance =
-    Number(
-      product.inward_clearance_charge ??
-        0,
-    );
-
-  /*
-   * IMPORTANT:
-   * Supplier-side MOP comes from the product.
-   */
-
-  const inwardBankCharge =
-    getSupplierBankCharge(
-      product.supplier_mop,
-      supplierInvoiceValue,
-      Number(
-        product.supplier_credit_days ??
-          0,
-      ),
-      settings,
-    );
-
-  const storageCharge =
-    Number(
-      product.storage_rate ?? 0,
-    ) *
-    Number(
-      product.storage_days ?? 0,
-    );
-
-  /*
-   * ----------------------------------------------------------
-   * TRANSPORT
-   * ----------------------------------------------------------
-   */
-
-  const {
-    transportCost:
-      outwardTransport,
-  } = getTransportCost(
-    quantity,
-    transport,
-    vehicle,
-    destination?.code,
-    settings,
-  );
-
-  const outwardClearance = 0;
-
-  const freight = 0;
-
-  /*
-   * ----------------------------------------------------------
-   * CUSTOMS
-   * ----------------------------------------------------------
-   */
-
-  const customsDuty =
-    supplierInvoiceValue *
-    Number(
-      settings.customs_duty_pct,
-    );
-
-  /*
-   * ----------------------------------------------------------
-   * OTHER EXPENSES
-   * ----------------------------------------------------------
-   */
-
-  const otherExpense =
-    getCourierExpense(
-      input.paymentTerm,
-      destination?.region,
-      input.deliveryType,
-      settings,
-    );
-
-  /*
-   * ----------------------------------------------------------
-   * FIXED COST
-   * ----------------------------------------------------------
-   */
-
-  const fixedCost =
-    exWorksCost +
-    inwardClearance +
-    inwardBankCharge +
-    storageCharge +
-    outwardClearance +
-    outwardTransport +
-    freight +
-    customsDuty +
-    otherExpense;
-
-  /*
-   * ----------------------------------------------------------
-   * CAPITAL INTEREST
-   * ----------------------------------------------------------
-   *
-   * This remains based on customer credit period because
-   * this represents the financing exposure created by the
-   * customer transaction.
-   */
-
-  const capitalInterest =
-    fixedCost *
-    settings.annual_interest_rate *
-    (input.creditDays / 365);
-
-  /*
-   * ----------------------------------------------------------
-   * CUSTOMER BANK FINANCE
-   * ----------------------------------------------------------
-   */
-
-  const fixedFinanceCharge =
-    getCustomerBankCharge(
-      input.paymentTerm,
-      0,
-      settings,
-    );
-
-  /*
-   * getCustomerBankCharge(0) gives us only the fixed portion
-   * for LC/DA/draft.
-   */
-
-  const salesDependentFinanceRate =
-    input.paymentTerm === "LC"
-      ? settings.customer_lc_value_pct
-      : 0;
-
-  /*
-   * ----------------------------------------------------------
-   * INSURANCE
-   * ----------------------------------------------------------
-   */
-
-  const insuranceRate =
-    getInsuranceRate(
-      input.incoterm,
-      settings,
-    );
-
-  /*
-   * ----------------------------------------------------------
-   * SOLVE SELLING PRICE
-   * ----------------------------------------------------------
-   *
-   * Sales =
-   *
-   * Base Cost /
-   * (
-   *   1
-   *   - target margin
-   *   - insurance rate
-   *   - customer finance rate
-   * )
-   */
-
-  const baseAmount =
-    fixedCost +
+  const capitalInterest = purchaseCost * options.settings.annual_interest_rate * (Number(input.creditDays) / 365);
+  const fixedSellingCost =
+    outwardClearanceCalc.fixed +
+    outwardTransportCalc.fixed +
+    freightCalc.fixed +
+    otherExpenseCalc.fixed +
+    customsDutyCalc.fixed +
     capitalInterest +
     fixedFinanceCharge;
 
-  const targetMargin =
-    input.targetProfitPct / 100;
+  const salesDependentRate =
+    customerFinance.variableRate +
+    insuranceCalc.variableRate +
+    customsDutyCalc.variableRate +
+    otherExpenseCalc.variableRate +
+    outwardClearanceCalc.variableRate +
+    freightCalc.variableRate +
+    outwardTransportCalc.variableRate;
 
-  const denominator =
-    1 -
-    targetMargin -
-    insuranceRate -
-    salesDependentFinanceRate;
+  const targetMargin = input.targetProfitPct / 100;
+  const denominator = 1 - targetMargin - salesDependentRate;
+  if (denominator <= 0) throw new Error("The selected margin and configured selling charges produce an invalid selling price.");
 
-  if (
-    denominator <= 0
-  ) {
-    throw new Error(
-      "The selected margin and finance/insurance rates produce an invalid selling price.",
-    );
-  }
-
-  const salesPrice =
-    baseAmount /
-    denominator;
-
-  /*
-   * ----------------------------------------------------------
-   * SALES-DEPENDENT COSTS
-   * ----------------------------------------------------------
-   */
-
-  const insurance =
-    salesPrice *
-    insuranceRate;
-
-  const variableFinanceCharge =
-    salesPrice *
-    salesDependentFinanceRate;
-
-  const bankFinanceCharge =
-    fixedFinanceCharge +
-    variableFinanceCharge;
-
-  /*
-   * ----------------------------------------------------------
-   * TOTAL COST
-   * ----------------------------------------------------------
-   */
+  const salesPrice = (purchaseCost + fixedSellingCost) / denominator;
+  const insurance = salesPrice * insuranceCalc.variableRate;
+  const variableFinance = salesPrice * customerFinance.variableRate;
+  const customsDuty = salesPrice * customsDutyCalc.variableRate;
+  const otherExpense = otherExpenseCalc.fixed + salesPrice * otherExpenseCalc.variableRate;
+  const outwardClearance = outwardClearanceCalc.fixed + salesPrice * outwardClearanceCalc.variableRate;
+  const freight = freightCalc.fixed + salesPrice * freightCalc.variableRate;
+  const outwardTransport = outwardTransportCalc.value + salesPrice * outwardTransportCalc.variableRate;
+  const bankFinanceCharge = fixedFinanceCharge + variableFinance;
 
   const totalCost =
-    baseAmount +
+    purchaseCost +
+    outwardClearance +
+    outwardTransport +
+    freight +
     insurance +
-    variableFinanceCharge;
+    otherExpense +
+    customsDuty +
+    capitalInterest +
+    bankFinanceCharge;
 
-  const costPerUnit =
-    totalCost /
-    quantity;
+  const costPerUnit = totalCost / quantity;
+  const salesUnitPrice = salesPrice / quantity;
+  const profitAmount = salesPrice - totalCost;
+  const finalMarginPct = salesPrice === 0 ? 0 : (profitAmount / salesPrice) * 100;
 
-  const salesUnitPrice =
-    salesPrice /
-    quantity;
-
-  const profitAmount =
-    salesPrice -
-    totalCost;
-
-  const finalMarginPct =
-    salesPrice === 0
-      ? 0
-      : (profitAmount /
-          salesPrice) *
-        100;
-
-  /*
-   * ----------------------------------------------------------
-   * SAFETY
-   * ----------------------------------------------------------
-   */
-
-  const values = {
-    supplierInvoiceValue,
+  const result = {
+    quantityKg: quantity,
+    sourcePurchaseCount,
+    purchaseCost,
+    purchaseUnitCost,
+    warehouseDays,
     exWorksCost,
+    supplierInvoiceValue: exWorksCost,
     inwardClearance,
-    inwardBankCharge,
+    inwardBankCharge: 0,
     storageCharge,
     outwardClearance,
     outwardTransport,
@@ -665,113 +215,34 @@ export function calculateCosting(
     finalMarginPct,
   };
 
-  for (
-    const [name, value] of Object.entries(
-      values,
-    )
-  ) {
-    assertFinite(
-      value,
-      name,
-    );
+  for (const [name, value] of Object.entries(result)) {
+    if (typeof value === "number") assertFinite(value, name);
   }
 
-  /*
-   * ----------------------------------------------------------
-   * RESULT
-   * ----------------------------------------------------------
-   */
-
   return {
-    quantityKg:
-      round(quantity),
-
-    exWorksCost:
-      round(exWorksCost),
-
-    supplierInvoiceValue:
-      round(
-        supplierInvoiceValue,
-      ),
-
-    inwardClearance:
-      round(
-        inwardClearance,
-      ),
-
-    inwardBankCharge:
-      round(
-        inwardBankCharge,
-      ),
-
-    storageCharge:
-      round(
-        storageCharge,
-      ),
-
-    outwardClearance:
-      round(
-        outwardClearance,
-      ),
-
-    outwardTransport:
-      round(
-        outwardTransport,
-      ),
-
-    freight:
-      round(freight),
-
-    insurance:
-      round(insurance),
-
-    otherExpense:
-      round(otherExpense),
-
-    bankFinanceCharge:
-      round(
-        bankFinanceCharge,
-      ),
-
-    capitalInterest:
-      round(
-        capitalInterest,
-      ),
-
-    customsDuty:
-      round(
-        customsDuty,
-      ),
-
-    totalCost:
-      round(totalCost),
-
-    costPerUnit:
-      round(
-        costPerUnit,
-        4,
-      ),
-
-    salesPrice:
-      round(
-        salesPrice,
-      ),
-
-    salesUnitPrice:
-      round(
-        salesUnitPrice,
-        4,
-      ),
-
-    profitAmount:
-      round(
-        profitAmount,
-      ),
-
-    finalMarginPct:
-      round(
-        finalMarginPct,
-        4,
-      ),
+    ...result,
+    quantityKg: round(result.quantityKg),
+    purchaseCost: round(result.purchaseCost),
+    purchaseUnitCost: round(result.purchaseUnitCost, 4),
+    warehouseDays: round(result.warehouseDays, 2),
+    exWorksCost: round(result.exWorksCost),
+    supplierInvoiceValue: round(result.supplierInvoiceValue),
+    inwardClearance: round(result.inwardClearance),
+    inwardBankCharge: round(result.inwardBankCharge),
+    storageCharge: round(result.storageCharge),
+    outwardClearance: round(result.outwardClearance),
+    outwardTransport: round(result.outwardTransport),
+    freight: round(result.freight),
+    insurance: round(result.insurance),
+    otherExpense: round(result.otherExpense),
+    bankFinanceCharge: round(result.bankFinanceCharge),
+    capitalInterest: round(result.capitalInterest),
+    customsDuty: round(result.customsDuty),
+    totalCost: round(result.totalCost),
+    costPerUnit: round(result.costPerUnit, 4),
+    salesPrice: round(result.salesPrice),
+    salesUnitPrice: round(result.salesUnitPrice, 4),
+    profitAmount: round(result.profitAmount),
+    finalMarginPct: round(result.finalMarginPct, 4),
   };
 }
