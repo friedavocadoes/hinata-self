@@ -8,6 +8,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { calculateCosting } from "@/lib/costing/engine";
 import { CostingInput, CostingSettings, IncotermCostRule, PurchaseBatch } from "@/lib/costing/types";
 
+const itemSchema = z.object({
+  productId: z.string().uuid(),
+  quantityKg: z.number().finite().positive(),
+  targetProfitPct: z.number().finite().min(0).lt(100),
+  warehouseDaysOverride: z.number().finite().min(0).optional(),
+  transportCostOverrideAed: z.number().finite().min(0).optional(),
+  manualOtherCostAed: z.number().finite().min(0).optional(),
+});
+
 const calculateSchema = z.object({
   customerId: z.string().uuid(),
   deliveryType: z.enum(["local", "export"]),
@@ -17,7 +26,7 @@ const calculateSchema = z.object({
   creditDays: z.number().finite().min(0),
   vehicleType: z.string().uuid(),
   freightAed: z.number().finite().min(0).default(0),
-  items: z.array(z.object({ productId: z.string().uuid(), quantityKg: z.number().finite().positive(), targetProfitPct: z.number().finite().min(0).lt(100) })).min(1),
+  items: z.array(itemSchema).min(1),
 });
 
 type CalculationInput = z.infer<typeof calculateSchema>;
@@ -73,7 +82,7 @@ function assertFiniteNumber(value: number, field: string) {
   if (!Number.isFinite(value)) throw new Error(`Costing calculation produced an invalid value for "${field}".`);
 }
 
-async function calculateInternal(input: CalculationInput): Promise<InternalCalculation> {
+export async function calculateInternal(input: CalculationInput): Promise<InternalCalculation> {
   const admin = createAdminClient();
   const [settingsResult, customerResult, destinationResult, incotermResult, paymentTermResult, vehicleResult, productsResult] = await Promise.all([
     admin.from("global_settings").select("setting_key, setting_value"),
@@ -163,11 +172,11 @@ async function calculateInternal(input: CalculationInput): Promise<InternalCalcu
   }
 
   const transportRule = (rules ?? []).find((rule) => rule.cost_code === "outward_transport" && rule.enabled && rule.calculation_type !== "disabled");
-  const transportResult = transportRule
+  const transportResult = transportRule && incoterm.code !== "EXW"
     ? await admin.from("transport_rates").select("rate_aed").eq("destination_id", input.destinationId).eq("vehicle_type_id", input.vehicleType).eq("active", true).maybeSingle()
     : { data: null, error: null };
   if (transportResult.error) throw new Error(transportResult.error.message);
-  if (transportRule && input.deliveryType === "local" && !transportResult.data) throw new Error(`No transport rate is configured for ${destination.name} using ${vehicle.name}.`);
+  if (transportRule && incoterm.code !== "EXW" && input.deliveryType === "local" && !transportResult.data && input.items.some((item) => item.transportCostOverrideAed === undefined)) throw new Error(`No transport rate is configured for ${destination.name} using ${vehicle.name}.`);
 
   const results: InternalCalculation["items"] = [];
 
@@ -187,6 +196,9 @@ async function calculateInternal(input: CalculationInput): Promise<InternalCalcu
       targetProfitPct: item.targetProfitPct,
       vehicleType: input.vehicleType,
       freightAed: input.freightAed,
+      warehouseDaysOverride: item.warehouseDaysOverride,
+      transportCostOverrideAed: item.transportCostOverrideAed,
+      manualOtherCostAed: item.manualOtherCostAed,
     };
 
     const result = calculateCosting(costingInput, {
@@ -245,6 +257,35 @@ async function persistQuotation(profileId: string, input: CalculationInput, calc
   return quotation;
 }
 
+function responseForRole(profile: { role?: string | null } | null | undefined, calculation: InternalCalculation, extra: Record<string, unknown> = {}) {
+  if (profile?.role === "finance_admin") return {
+    success: true as const,
+    role: "finance_admin" as const,
+    items: calculation.items,
+    totalSales: calculation.totalSales,
+    totalCost: calculation.totalCost,
+    totalProfit: calculation.totalProfit,
+    finalMarginPct: calculation.finalMarginPct,
+    ...extra,
+  };
+
+  return {
+    success: true as const,
+    role: "sales_rep" as const,
+    items: calculation.items.map((item) => ({ productId: item.productId, productName: item.productName, quantityKg: item.quantityKg, salesUnitPrice: item.salesUnitPrice, salesPrice: item.salesPrice })),
+    totalSales: calculation.totalSales,
+    ...extra,
+  };
+}
+
+export async function previewQuotation(rawInput: CalculationInput) {
+  const { profile } = await requireUser();
+  const parsed = calculateSchema.safeParse(rawInput);
+  if (!parsed.success) return { success: false as const, error: "Invalid costing data." };
+  const calculation = await calculateInternal(parsed.data);
+  return responseForRole(profile, calculation);
+}
+
 export async function calculateQuotation(rawInput: CalculationInput) {
   const { profile } = await requireUser();
   const parsed = calculateSchema.safeParse(rawInput);
@@ -256,8 +297,7 @@ export async function calculateQuotation(rawInput: CalculationInput) {
   revalidatePath("/quotations");
   revalidatePath("/dashboard");
 
-  if (profile?.role === "finance_admin") return { success: true as const, role: "finance_admin" as const, quotationId: quotation.id, quoteNumber: quotation.quote_number, items: calculation.items, totalSales: calculation.totalSales, totalCost: calculation.totalCost, totalProfit: calculation.totalProfit };
-  return { success: true as const, role: "sales_rep" as const, quotationId: quotation.id, quoteNumber: quotation.quote_number, items: calculation.items.map((item) => ({ productId: item.productId, productName: item.productName, quantityKg: item.quantityKg, salesUnitPrice: item.salesUnitPrice, salesPrice: item.salesPrice })), totalSales: calculation.totalSales };
+  return responseForRole(profile, calculation, { quotationId: quotation.id, quoteNumber: quotation.quote_number });
 }
 
 export async function getCustomerProducts(customerId: string) {
