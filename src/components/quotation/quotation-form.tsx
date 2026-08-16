@@ -7,11 +7,7 @@ import {
 } from "@/app/(dashboard)/quotations/new/actions";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useEffect, useMemo, useState } from "react";
-import {
-  Controller,
-  useFieldArray,
-  useForm,
-} from "react-hook-form";
+import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
@@ -30,13 +26,18 @@ const quotationSchema = z.object({
   incoterm: z.string().uuid("Incoterm is required"),
   paymentTerm: z.string().uuid("Payment term is required"),
   creditDays: z.number().finite().min(0, "Credit days cannot be negative"),
-  items: z.array(
-    z.object({
-      productId: z.string().uuid("Product is required"),
-      quantityKg: z.number().finite().positive("Quantity must be greater than zero"),
-      targetProfitPct: z.number().finite().min(0).lt(100),
-    }),
-  ).min(1),
+  items: z
+    .array(
+      z.object({
+        productId: z.string().uuid("Product is required"),
+        quantityKg: z
+          .number()
+          .finite()
+          .positive("Quantity must be greater than zero"),
+        targetProfitPct: z.number().finite().min(0).lt(100),
+      }),
+    )
+    .min(1),
 });
 
 type QuotationFormValues = z.infer<typeof quotationSchema>;
@@ -78,7 +79,10 @@ function getVehicleIdForQuantity(quantityKg: number, vehicles: Option[]) {
 
   for (const vehicle of ordered) {
     const vehicleCapacity = capacity(vehicle.name);
-    if (vehicleCapacity !== Number.MAX_SAFE_INTEGER && quantityKg <= vehicleCapacity) {
+    if (
+      vehicleCapacity !== Number.MAX_SAFE_INTEGER &&
+      quantityKg <= vehicleCapacity
+    ) {
       return vehicle.id;
     }
   }
@@ -138,17 +142,27 @@ export function QuotationForm({
 
   const productOptions = useMemo(() => {
     const matched = customerProducts
-      .filter((item) => item.product_id && item.product_match_status === "matched")
-      .map((item) => ({ id: item.product_id as string, name: item.product_name_original }));
+      .filter(
+        (item) => item.product_id && item.product_match_status === "matched",
+      )
+      .map((item) => ({
+        id: item.product_id as string,
+        name: item.product_name_original,
+      }));
 
-    const unique = Array.from(new Map(matched.map((item) => [item.id, item])).values());
+    const unique = Array.from(
+      new Map(matched.map((item) => [item.id, item])).values(),
+    );
     const ids = new Set(unique.map((item) => item.id));
 
     return [...unique, ...products.filter((product) => !ids.has(product.id))];
   }, [customerProducts, products]);
 
   async function handleCustomerChange(customerId: string) {
-    setValue("customerId", customerId, { shouldValidate: true, shouldDirty: true });
+    setValue("customerId", customerId, {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
     setValue("items", [{ productId: "", quantityKg: 0, targetProfitPct: 5 }]);
     setResult(null);
     setSubmitError(null);
@@ -176,7 +190,10 @@ export function QuotationForm({
         throw new Error("Vehicle types are still loading. Please try again.");
       }
 
-      const totalQuantity = values.items.reduce((sum, item) => sum + item.quantityKg, 0);
+      const totalQuantity = values.items.reduce(
+        (sum, item) => sum + item.quantityKg,
+        0,
+      );
       const vehicleType = getVehicleIdForQuantity(totalQuantity, vehicleTypes);
 
       if (!vehicleType) {
@@ -196,7 +213,9 @@ export function QuotationForm({
     } catch (error) {
       console.error("Quotation calculation failed:", error);
       setSubmitError(
-        error instanceof Error ? error.message : "Failed to calculate quotation.",
+        error instanceof Error
+          ? error.message
+          : "Failed to calculate quotation.",
       );
     } finally {
       setLoading(false);
@@ -209,7 +228,9 @@ export function QuotationForm({
         <section className="rounded-xl border bg-white p-6 shadow-sm">
           <div className="mb-6">
             <h2 className="text-base font-semibold">Quotation Details</h2>
-            <p className="mt-1 text-sm text-zinc-500">Customer, delivery and payment information.</p>
+            <p className="mt-1 text-sm text-zinc-500">
+              Customer, delivery and payment information.
+            </p>
           </div>
 
           <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
@@ -226,15 +247,22 @@ export function QuotationForm({
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium">Delivery Type</label>
-              <select {...register("deliveryType")} className="w-full rounded-lg border bg-white px-3 py-2.5 text-sm outline-none focus:border-zinc-400">
+              <label className="mb-2 block text-sm font-medium">
+                Delivery Type
+              </label>
+              <select
+                {...register("deliveryType")}
+                className="w-full rounded-lg border bg-white px-3 py-2.5 text-sm outline-none focus:border-zinc-400"
+              >
                 <option value="local">Local</option>
                 <option value="export">Export</option>
               </select>
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium">Destination</label>
+              <label className="mb-2 block text-sm font-medium">
+                Destination
+              </label>
               <Controller
                 control={control}
                 name="destinationId"
@@ -270,7 +298,9 @@ export function QuotationForm({
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium">Payment Term</label>
+              <label className="mb-2 block text-sm font-medium">
+                Payment Term
+              </label>
               <Controller
                 control={control}
                 name="paymentTerm"
@@ -288,7 +318,9 @@ export function QuotationForm({
             </div>
 
             <div>
-              <label className="mb-2 block text-sm font-medium">Credit Period</label>
+              <label className="mb-2 block text-sm font-medium">
+                Credit Period
+              </label>
               <div className="relative">
                 <input
                   type="number"
@@ -296,38 +328,46 @@ export function QuotationForm({
                   {...register("creditDays", { valueAsNumber: true })}
                   className="w-full rounded-lg border bg-white px-3 py-2.5 pr-14 text-sm outline-none focus:border-zinc-400"
                 />
-                <span className="absolute right-3 top-2.5 text-sm text-zinc-400">days</span>
+                <span className="absolute right-3 top-2.5 text-sm text-zinc-400">
+                  days
+                </span>
               </div>
               <FieldError message={errors.creditDays?.message} />
             </div>
           </div>
         </section>
 
-        <section className="overflow-hidden rounded-xl border bg-white shadow-sm">
+        <section className="rounded-xl border bg-white shadow-sm">
           <div className="flex items-center justify-between border-b p-6">
             <div>
               <h2 className="text-base font-semibold">Line Items</h2>
               <p className="mt-1 text-sm text-zinc-500">
-                Customer products appear first. Vehicle capacity is selected automatically from total quantity.
+                Customer products appear first. Vehicle capacity is selected
+                automatically from total quantity.
               </p>
             </div>
             <button
               type="button"
-              onClick={() => append({ productId: "", quantityKg: 0, targetProfitPct: 5 })}
+              onClick={() =>
+                append({ productId: "", quantityKg: 0, targetProfitPct: 5 })
+              }
               className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-zinc-50"
             >
               <Plus size={16} /> Add Product
             </button>
           </div>
-
-          <div className="overflow-x-auto">
+          <div className="overflow-visible">
             <table className="w-full min-w-[760px] text-sm">
               <thead className="border-b bg-zinc-50">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium">#</th>
                   <th className="px-6 py-3 text-left font-medium">Product</th>
-                  <th className="px-6 py-3 text-left font-medium">Quantity (kg)</th>
-                  <th className="px-6 py-3 text-left font-medium">Target Margin</th>
+                  <th className="px-6 py-3 text-left font-medium">
+                    Quantity (kg)
+                  </th>
+                  <th className="px-6 py-3 text-left font-medium">
+                    Target Margin
+                  </th>
                   <th className="w-12 px-4 py-3" />
                 </tr>
               </thead>
@@ -349,18 +389,24 @@ export function QuotationForm({
                           />
                         )}
                       />
-                      <FieldError message={errors.items?.[index]?.productId?.message} />
+                      <FieldError
+                        message={errors.items?.[index]?.productId?.message}
+                      />
                     </td>
                     <td className="px-6 py-4">
                       <input
                         type="number"
                         min="0.01"
                         step="0.01"
-                        {...register(`items.${index}.quantityKg`, { valueAsNumber: true })}
+                        {...register(`items.${index}.quantityKg`, {
+                          valueAsNumber: true,
+                        })}
                         className="w-full rounded-lg border px-3 py-2.5 outline-none focus:border-zinc-400"
                         placeholder="0"
                       />
-                      <FieldError message={errors.items?.[index]?.quantityKg?.message} />
+                      <FieldError
+                        message={errors.items?.[index]?.quantityKg?.message}
+                      />
                     </td>
                     <td className="px-6 py-4">
                       <div className="relative max-w-[150px]">
@@ -369,10 +415,14 @@ export function QuotationForm({
                           min="0"
                           max="99.99"
                           step="0.01"
-                          {...register(`items.${index}.targetProfitPct`, { valueAsNumber: true })}
+                          {...register(`items.${index}.targetProfitPct`, {
+                            valueAsNumber: true,
+                          })}
                           className="w-full rounded-lg border px-3 py-2.5 pr-8 outline-none focus:border-zinc-400"
                         />
-                        <span className="absolute right-3 top-2.5 text-zinc-400">%</span>
+                        <span className="absolute right-3 top-2.5 text-zinc-400">
+                          %
+                        </span>
                       </div>
                     </td>
                     <td className="px-4 py-4 text-right">
@@ -407,7 +457,11 @@ export function QuotationForm({
             disabled={loading}
             className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <Calculator size={16} />}
+            {loading ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Calculator size={16} />
+            )}
             {loading ? "Calculating..." : "Calculate Quotation"}
           </button>
         </div>
@@ -423,35 +477,57 @@ export function QuotationForm({
               <div>
                 <h2 className="text-base font-semibold">Quotation Result</h2>
                 <p className="text-sm text-zinc-500">
-                  {result.role === "finance_admin" ? "Internal costing breakdown" : "Customer-facing selling prices"}
+                  {result.role === "finance_admin"
+                    ? "Internal costing breakdown"
+                    : "Customer-facing selling prices"}
                 </p>
               </div>
             </div>
             <div className="text-right">
-              <p className="text-xs uppercase tracking-wide text-zinc-400">Total Quote</p>
-              <p className="text-2xl font-semibold tracking-tight">{money(result.totalSales)}</p>
+              <p className="text-xs uppercase tracking-wide text-zinc-400">
+                Total Quote
+              </p>
+              <p className="text-2xl font-semibold tracking-tight">
+                {money(result.totalSales)}
+              </p>
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-visible">
             <table className="w-full min-w-[720px] text-sm">
               <thead className="border-b bg-zinc-50">
                 <tr>
                   <th className="px-6 py-3 text-left font-medium">Product</th>
                   <th className="px-6 py-3 text-right font-medium">Qty</th>
-                  <th className="px-6 py-3 text-right font-medium">Unit Selling Price</th>
+                  <th className="px-6 py-3 text-right font-medium">
+                    Unit Selling Price
+                  </th>
                   <th className="px-6 py-3 text-right font-medium">Total</th>
-                  {result.role === "finance_admin" && <th className="px-6 py-3 text-right font-medium">Margin</th>}
+                  {result.role === "finance_admin" && (
+                    <th className="px-6 py-3 text-right font-medium">Margin</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {result.items.map((item) => (
                   <tr key={item.productId}>
-                    <td className="px-6 py-4 font-medium">{"productName" in item ? item.productName : "Product"}</td>
-                    <td className="px-6 py-4 text-right">{number(item.quantityKg)} kg</td>
-                    <td className="px-6 py-4 text-right">{money(item.salesUnitPrice)}</td>
-                    <td className="px-6 py-4 text-right font-medium">{money(item.salesPrice)}</td>
-                    {result.role === "finance_admin" && <td className="px-6 py-4 text-right">{number(item.finalMarginPct)}%</td>}
+                    <td className="px-6 py-4 font-medium">
+                      {"productName" in item ? item.productName : "Product"}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {number(item.quantityKg)} kg
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      {money(item.salesUnitPrice)}
+                    </td>
+                    <td className="px-6 py-4 text-right font-medium">
+                      {money(item.salesPrice)}
+                    </td>
+                    {result.role === "finance_admin" && (
+                      <td className="px-6 py-4 text-right">
+                        {number(item.finalMarginPct)}%
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -462,16 +538,28 @@ export function QuotationForm({
             <>
               <div className="grid gap-px border-t bg-zinc-200 sm:grid-cols-3">
                 <div className="bg-white p-5">
-                  <p className="text-xs uppercase tracking-wide text-zinc-400">Total Cost</p>
-                  <p className="mt-1 text-lg font-semibold">{money(result.totalCost)}</p>
+                  <p className="text-xs uppercase tracking-wide text-zinc-400">
+                    Total Cost
+                  </p>
+                  <p className="mt-1 text-lg font-semibold">
+                    {money(result.totalCost)}
+                  </p>
                 </div>
                 <div className="bg-white p-5">
-                  <p className="text-xs uppercase tracking-wide text-zinc-400">Total Sales</p>
-                  <p className="mt-1 text-lg font-semibold">{money(result.totalSales)}</p>
+                  <p className="text-xs uppercase tracking-wide text-zinc-400">
+                    Total Sales
+                  </p>
+                  <p className="mt-1 text-lg font-semibold">
+                    {money(result.totalSales)}
+                  </p>
                 </div>
                 <div className="bg-white p-5">
-                  <p className="text-xs uppercase tracking-wide text-zinc-400">Total Profit</p>
-                  <p className="mt-1 text-lg font-semibold text-emerald-600">{money(result.totalProfit)}</p>
+                  <p className="text-xs uppercase tracking-wide text-zinc-400">
+                    Total Profit
+                  </p>
+                  <p className="mt-1 text-lg font-semibold text-emerald-600">
+                    {money(result.totalProfit)}
+                  </p>
                 </div>
               </div>
 
@@ -485,7 +573,9 @@ export function QuotationForm({
                       <tr>
                         <th className="px-4 py-3 text-left">Product</th>
                         <th className="px-4 py-3 text-right">Ex-Works</th>
-                        <th className="px-4 py-3 text-right">Inward Clearance</th>
+                        <th className="px-4 py-3 text-right">
+                          Inward Clearance
+                        </th>
                         <th className="px-4 py-3 text-right">Bank</th>
                         <th className="px-4 py-3 text-right">Storage</th>
                         <th className="px-4 py-3 text-right">Transport</th>
@@ -498,16 +588,38 @@ export function QuotationForm({
                     <tbody className="divide-y">
                       {result.items.map((item) => (
                         <tr key={`breakdown-${item.productId}`}>
-                          <td className="px-4 py-3 font-medium">{item.productName}</td>
-                          <td className="px-4 py-3 text-right">{money(item.exWorksCost)}</td>
-                          <td className="px-4 py-3 text-right">{money(item.inwardClearance)}</td>
-                          <td className="px-4 py-3 text-right">{money(item.inwardBankCharge)}</td>
-                          <td className="px-4 py-3 text-right">{money(item.storageCharge)}</td>
-                          <td className="px-4 py-3 text-right">{money(item.outwardTransport)}</td>
-                          <td className="px-4 py-3 text-right">{money(item.customsDuty)}</td>
-                          <td className="px-4 py-3 text-right">{money(item.insurance)}</td>
-                          <td className="px-4 py-3 text-right">{money(item.bankFinanceCharge + item.capitalInterest)}</td>
-                          <td className="px-4 py-3 text-right font-semibold">{money(item.totalCost)}</td>
+                          <td className="px-4 py-3 font-medium">
+                            {item.productName}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(item.exWorksCost)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(item.inwardClearance)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(item.inwardBankCharge)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(item.storageCharge)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(item.outwardTransport)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(item.customsDuty)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(item.insurance)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {money(
+                              item.bankFinanceCharge + item.capitalInterest,
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right font-semibold">
+                            {money(item.totalCost)}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -519,7 +631,8 @@ export function QuotationForm({
 
           <div className="flex items-center justify-between border-t bg-zinc-50 px-6 py-4">
             <p className="text-sm text-zinc-500">
-              {watchedItems.length} line item{watchedItems.length === 1 ? "" : "s"}
+              {watchedItems.length} line item
+              {watchedItems.length === 1 ? "" : "s"}
             </p>
             <button
               type="button"
