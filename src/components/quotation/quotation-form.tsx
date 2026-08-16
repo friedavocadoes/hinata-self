@@ -525,7 +525,9 @@ export function QuotationForm({
                     </td>
                     {result.role === "finance_admin" && (
                       <td className="px-6 py-4 text-right">
-                        {number(item.finalMarginPct)}%
+                        {"finalMarginPct" in item
+                          ? `${number(item.finalMarginPct)}%`
+                          : "--"}
                       </td>
                     )}
                   </tr>
