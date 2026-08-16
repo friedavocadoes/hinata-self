@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth/permissions";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -37,7 +38,11 @@ export async function createOrderFromQuotation(quotationId: string) {
     cost_per_unit: item.cost_per_unit, total_cost: item.total_cost, profit_amount: item.profit_amount,
   })));
   if (insertItemsError) { await admin.from("orders").delete().eq("id", order.id); throw new Error(insertItemsError.message); }
+
   await admin.from("quotations").update({ status: "won" }).eq("id", quotationId);
+  revalidatePath("/orders");
+  revalidatePath("/quotations");
+  revalidatePath("/dashboard");
   return order.id;
 }
 
@@ -59,4 +64,9 @@ export async function updateOrderStatus(orderId: string, status: "draft" | "conf
 
   const { error } = await admin.from("orders").update({ status }).eq("id", orderId);
   if (error) throw new Error(error.message);
+
+  revalidatePath("/orders");
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath("/inventory");
+  revalidatePath("/dashboard");
 }
