@@ -16,16 +16,58 @@ const calculateSchema = z.object({
   paymentTerm: z.string().uuid(),
   creditDays: z.number().finite().min(0),
   vehicleType: z.string().uuid(),
-  items: z.array(z.object({
-    productId: z.string().uuid(),
-    quantityKg: z.number().finite().positive(),
-    targetProfitPct: z.number().finite().min(0).lt(100),
-  })).min(1),
+  items: z
+    .array(
+      z.object({
+        productId: z.string().uuid(),
+        quantityKg: z.number().finite().positive(),
+        targetProfitPct: z.number().finite().min(0).lt(100),
+      }),
+    )
+    .min(1),
 });
 
 type CalculationInput = z.infer<typeof calculateSchema>;
 
-function settingsFromRows(rows: { setting_key: string; setting_value: number | string }[]): CostingSettings {
+type InternalCalculation = {
+  items: Array<{
+    productId: string;
+    productName: string;
+    quantityKg: number;
+    exWorksCost: number;
+    supplierInvoiceValue: number;
+    inwardClearance: number;
+    inwardBankCharge: number;
+    storageCharge: number;
+    outwardClearance: number;
+    outwardTransport: number;
+    freight: number;
+    insurance: number;
+    otherExpense: number;
+    bankFinanceCharge: number;
+    capitalInterest: number;
+    customsDuty: number;
+    totalCost: number;
+    costPerUnit: number;
+    salesPrice: number;
+    salesUnitPrice: number;
+    profitAmount: number;
+    finalMarginPct: number;
+  }>;
+  totalSales: number;
+  totalCost: number;
+  totalProfit: number;
+  finalMarginPct: number;
+  customerName: string;
+  destinationName: string;
+  incotermCode: string;
+  paymentTermCode: string;
+  vehicleTypeId: string;
+};
+
+function settingsFromRows(
+  rows: { setting_key: string; setting_value: number | string }[],
+): CostingSettings {
   const raw = Object.fromEntries(
     rows.map((row) => [row.setting_key, Number(row.setting_value)]),
   );
@@ -66,38 +108,61 @@ function settingsFromRows(rows: { setting_key: string; setting_value: number | s
 
 function assertFiniteNumber(value: number, field: string) {
   if (!Number.isFinite(value)) {
-    throw new Error(`Costing calculation produced an invalid value for "${field}".`);
+    throw new Error(
+      `Costing calculation produced an invalid value for "${field}".`,
+    );
   }
 }
 
-export async function calculateQuotation(rawInput: CalculationInput) {
-  const { profile } = await requireUser();
-  const parsed = calculateSchema.safeParse(rawInput);
-
-  if (!parsed.success) {
-    return { success: false as const, error: "Invalid quotation data." };
-  }
-
-  const input = parsed.data;
-
-  // All financial master data is read with a server-only privileged client.
-  // The authenticated browser/user never receives these raw values.
+async function calculateInternal(input: CalculationInput): Promise<InternalCalculation> {
   const admin = createAdminClient();
 
-  const [settingsResult, destinationResult, incotermResult, paymentTermResult, vehicleResult] =
-    await Promise.all([
-      admin.from("global_settings").select("setting_key, setting_value"),
-      admin.from("destinations").select("id, name, code, delivery_type, region").eq("id", input.destinationId).single(),
-      admin.from("incoterms").select("id, name, code, delivery_type").eq("id", input.incoterm).single(),
-      admin.from("payment_terms").select("id, name, code").eq("id", input.paymentTerm).single(),
-      admin.from("vehicle_types").select("id, code, name, capacity_kg").eq("id", input.vehicleType).eq("active", true).single(),
-    ]);
+  const [
+    settingsResult,
+    customerResult,
+    destinationResult,
+    incotermResult,
+    paymentTermResult,
+    vehicleResult,
+  ] = await Promise.all([
+    admin.from("global_settings").select("setting_key, setting_value"),
+    admin.from("customers").select("id, name").eq("id", input.customerId).single(),
+    admin
+      .from("destinations")
+      .select("id, name, code, delivery_type, region")
+      .eq("id", input.destinationId)
+      .single(),
+    admin
+      .from("incoterms")
+      .select("id, name, code, delivery_type")
+      .eq("id", input.incoterm)
+      .single(),
+    admin
+      .from("payment_terms")
+      .select("id, name, code")
+      .eq("id", input.paymentTerm)
+      .single(),
+    admin
+      .from("vehicle_types")
+      .select("id, code, name, capacity_kg")
+      .eq("id", input.vehicleType)
+      .eq("active", true)
+      .single(),
+  ]);
 
-  for (const result of [settingsResult, destinationResult, incotermResult, paymentTermResult, vehicleResult]) {
+  for (const result of [
+    settingsResult,
+    customerResult,
+    destinationResult,
+    incotermResult,
+    paymentTermResult,
+    vehicleResult,
+  ]) {
     if (result.error) throw new Error(result.error.message);
   }
 
   const settings = settingsFromRows(settingsResult.data ?? []);
+  const customer = customerResult.data!;
   const destination = destinationResult.data!;
   const incoterm = incotermResult.data!;
   const paymentTerm = paymentTermResult.data!;
@@ -116,7 +181,9 @@ export async function calculateQuotation(rawInput: CalculationInput) {
   const transport = transportResult.data;
 
   if (input.deliveryType === "local" && !transport) {
-    throw new Error(`No transport rate is configured for ${destination.name} using ${vehicle.name}.`);
+    throw new Error(
+      `No transport rate is configured for ${destination.name} using ${vehicle.name}.`,
+    );
   }
 
   const productIds = [...new Set(input.items.map((item) => item.productId))];
@@ -144,10 +211,12 @@ export async function calculateQuotation(rawInput: CalculationInput) {
   const products = productsResult.data ?? [];
 
   if (products.length !== productIds.length) {
-    throw new Error("One or more selected products could not be found or are inactive.");
+    throw new Error(
+      "One or more selected products could not be found or are inactive.",
+    );
   }
 
-  const results = [];
+  const results: InternalCalculation["items"] = [];
 
   for (const item of input.items) {
     const product = products.find((row) => row.id === item.productId);
@@ -165,7 +234,10 @@ export async function calculateQuotation(rawInput: CalculationInput) {
     };
 
     assertFiniteNumber(normalizedProduct.cif_rate_usd, "CIF rate");
-    assertFiniteNumber(normalizedProduct.inward_clearance_charge, "Inward clearance");
+    assertFiniteNumber(
+      normalizedProduct.inward_clearance_charge,
+      "Inward clearance",
+    );
     assertFiniteNumber(normalizedProduct.storage_rate, "Storage rate");
     assertFiniteNumber(normalizedProduct.storage_days, "Storage days");
 
@@ -187,44 +259,178 @@ export async function calculateQuotation(rawInput: CalculationInput) {
       transport,
       vehicle: {
         code: vehicle.code,
-        capacity_kg: vehicle.capacity_kg === null ? null : Number(vehicle.capacity_kg),
+        capacity_kg:
+          vehicle.capacity_kg === null
+            ? null
+            : Number(vehicle.capacity_kg),
       },
-      destination: { code: destination.code, region: destination.region },
+      destination: {
+        code: destination.code,
+        region: destination.region,
+      },
     });
 
-    results.push({ productId: item.productId, productName: product.name, ...result });
+    results.push({
+      productId: item.productId,
+      productName: product.name,
+      ...result,
+    });
   }
 
-  const totalSales = results.reduce((sum, item) => sum + Number(item.salesPrice), 0);
-  const totalCost = results.reduce((sum, item) => sum + Number(item.totalCost), 0);
-  const totalProfit = results.reduce((sum, item) => sum + Number(item.profitAmount), 0);
+  const totalSales = results.reduce(
+    (sum, item) => sum + Number(item.salesPrice),
+    0,
+  );
+  const totalCost = results.reduce(
+    (sum, item) => sum + Number(item.totalCost),
+    0,
+  );
+  const totalProfit = results.reduce(
+    (sum, item) => sum + Number(item.profitAmount),
+    0,
+  );
+  const finalMarginPct = totalSales === 0 ? 0 : (totalProfit / totalSales) * 100;
 
   assertFiniteNumber(totalSales, "Total sales");
   assertFiniteNumber(totalCost, "Total cost");
   assertFiniteNumber(totalProfit, "Total profit");
+  assertFiniteNumber(finalMarginPct, "Final margin");
+
+  return {
+    items: results,
+    totalSales,
+    totalCost,
+    totalProfit,
+    finalMarginPct,
+    customerName: customer.name,
+    destinationName: destination.name,
+    incotermCode: incoterm.code,
+    paymentTermCode: paymentTerm.code,
+    vehicleTypeId: vehicle.id,
+  };
+}
+
+function generateQuoteNumber() {
+  const date = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const suffix = crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase();
+  return `QT-${date}-${suffix}`;
+}
+
+async function persistQuotation(
+  profileId: string,
+  input: CalculationInput,
+  calculation: InternalCalculation,
+) {
+  const admin = createAdminClient();
+  const quoteNumber = generateQuoteNumber();
+
+  const { data: quotation, error: quotationError } = await admin
+    .from("quotations")
+    .insert({
+      quote_number: quoteNumber,
+      created_by: profileId,
+      customer_id: input.customerId,
+      customer_name_snapshot: calculation.customerName,
+      delivery_type: input.deliveryType,
+      destination_id: input.destinationId,
+      destination_name_snapshot: calculation.destinationName,
+      incoterm_code: calculation.incotermCode,
+      pay_term_code: calculation.paymentTermCode,
+      credit_period_days: input.creditDays,
+      vehicle_type_id: calculation.vehicleTypeId,
+      total_cost: calculation.totalCost,
+      total_sales: calculation.totalSales,
+      total_profit: calculation.totalProfit,
+      final_margin_pct: calculation.finalMarginPct,
+      status: "draft",
+    })
+    .select("id, quote_number")
+    .single();
+
+  if (quotationError || !quotation) {
+    throw new Error(quotationError?.message ?? "Failed to save quotation.");
+  }
+
+  const itemRows = calculation.items.map((item) => ({
+    quotation_id: quotation.id,
+    product_id: item.productId,
+    product_name_snapshot: item.productName,
+    qty_kg: item.quantityKg,
+    target_profit_pct: input.items.find((source) => source.productId === item.productId)?.targetProfitPct ?? 0,
+    supplier_invoice_value: item.supplierInvoiceValue,
+    ex_works_cost: item.exWorksCost,
+    inward_clearance: item.inwardClearance,
+    inward_bank_charge: item.inwardBankCharge,
+    storage_charge: item.storageCharge,
+    outward_clearance: item.outwardClearance,
+    outward_transport: item.outwardTransport,
+    freight: item.freight,
+    insurance: item.insurance,
+    other_expense: item.otherExpense,
+    bank_finance_charge: item.bankFinanceCharge,
+    capital_interest: item.capitalInterest,
+    customs_duty: item.customsDuty,
+    total_cost: item.totalCost,
+    cost_per_unit: item.costPerUnit,
+    sales_unit_price: item.salesUnitPrice,
+    sales_price: item.salesPrice,
+    profit_amount: item.profitAmount,
+    final_margin_pct: item.finalMarginPct,
+  }));
+
+  const { error: itemsError } = await admin
+    .from("quotation_items")
+    .insert(itemRows);
+
+  if (itemsError) {
+    await admin.from("quotations").delete().eq("id", quotation.id);
+    throw new Error(itemsError.message);
+  }
+
+  return quotation;
+}
+
+export async function calculateQuotation(rawInput: CalculationInput) {
+  const { profile } = await requireUser();
+  const parsed = calculateSchema.safeParse(rawInput);
+
+  if (!parsed.success) {
+    return {
+      success: false as const,
+      error: "Invalid quotation data.",
+    };
+  }
+
+  const input = parsed.data;
+  const calculation = await calculateInternal(input);
+  const quotation = await persistQuotation(profile!.id, input, calculation);
 
   if (profile?.role === "finance_admin") {
     return {
       success: true as const,
       role: "finance_admin" as const,
-      items: results,
-      totalSales,
-      totalCost,
-      totalProfit,
+      quotationId: quotation.id,
+      quoteNumber: quotation.quote_number,
+      items: calculation.items,
+      totalSales: calculation.totalSales,
+      totalCost: calculation.totalCost,
+      totalProfit: calculation.totalProfit,
     };
   }
 
   return {
     success: true as const,
     role: "sales_rep" as const,
-    items: results.map((item) => ({
+    quotationId: quotation.id,
+    quoteNumber: quotation.quote_number,
+    items: calculation.items.map((item) => ({
       productId: item.productId,
       productName: item.productName,
       quantityKg: item.quantityKg,
       salesUnitPrice: item.salesUnitPrice,
       salesPrice: item.salesPrice,
     })),
-    totalSales,
+    totalSales: calculation.totalSales,
   };
 }
 
