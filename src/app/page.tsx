@@ -10,7 +10,8 @@ const features = [
 ];
 
 export default async function Home() {
-  const { user } = await getCurrentUser();
+  const currentUser = await getCurrentUser();
+  const user = currentUser?.user;
 
   return (
     <main className="min-h-screen overflow-hidden bg-zinc-950 text-white">
